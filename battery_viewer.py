@@ -19,6 +19,7 @@ import base64
 import ctypes
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -35,6 +36,7 @@ except Exception:
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import font as tkfont
+from tkinter import messagebox
 
 from hid_win import (
     BATTERY_USAGES,
@@ -50,7 +52,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -60,22 +62,31 @@ FEEDBACK_ENDPOINT = "https://batteryfeedback-ylbzzgxxdu.cn-hangzhou.fcapp.run"
 FEEDBACK_TIMEOUT = 15
 FEEDBACK_UA = "2.4G-battery-viewer/" + APP_VERSION
 
-# 颜色：柔和浅灰底 + 近白面板，避免大面积深色
-BG = "#F2F4F7"
-PANEL = "#FCFDFE"
-PANEL_LINE = "#E1E6EE"
-SHADOW = "#E7EBF2"
-HOVER = "#F6F8FB"
-BTN_HOVER = "#EAF0F7"
-CARD_LINE = "#E1E6EE"
-TEXT = "#1D2530"
-MUTED = "#697586"
-DIM = "#8590A0"
-GREEN = "#1E9E6A"
-AMBER = "#C07A18"
-RED = "#D45151"
-BLUE = "#2F7DE1"
-TRACK = "#E8ECF2"
+# 更新检测：只在用户主动点“检查更新”时才联网。
+# version.json 放在仓库里，version 是最新版本号，download_url 是新 exe 下载地址。
+UPDATE_REPO = "HHHHHH233333/2.4G-battery-viewer"
+UPDATE_TIMEOUT = 15
+UPDATE_DOWNLOAD_TIMEOUT = 600
+UPDATE_UA = "2.4G-battery-viewer/" + APP_VERSION
+
+# 颜色：深色科技风，青色霓虹高亮
+BG = "#0A0E17"
+PANEL = "#121826"
+PANEL_LINE = "#1E2838"
+SHADOW = "#05080F"
+HOVER = "#182132"
+BTN_HOVER = "#1B2740"
+CARD_LINE = "#1E2A3E"
+TEXT = "#E7EEF8"
+MUTED = "#8B98AB"
+DIM = "#5E6B7F"
+GREEN = "#2EE6A8"
+AMBER = "#F5B944"
+RED = "#FF6B6B"
+BLUE = "#4DA6FF"
+TRACK = "#1A2233"
+ACCENT = "#35C4E8"
+BAR_SEGS = 24
 
 FONT = "Microsoft YaHei UI"
 FONT_NUM = "Segoe UI Variable Display"
@@ -205,6 +216,24 @@ def level_color(pct: int | None) -> str:
     if pct <= 50:
         return AMBER
     return GREEN
+
+
+def _mix_hex(a: str, b: str, t: float) -> str:
+    """两个 #RRGGBB 颜色按 t(0~1) 线性插值。"""
+    a = a.lstrip("#"); b = b.lstrip("#")
+    ar, ag, ab = int(a[0:2], 16), int(a[2:4], 16), int(a[4:6], 16)
+    br, bg, bb = int(b[0:2], 16), int(b[2:4], 16), int(b[4:6], 16)
+    r = int(ar + (br - ar) * t)
+    g = int(ag + (bg - ag) * t)
+    bl = int(ab + (bb - ab) * t)
+    return f"#{r:02x}{g:02x}{bl:02x}"
+
+
+def _bar_gradient(base: str, t: float) -> str:
+    """进度条霓虹光晕：左端偏暗、右端更亮。"""
+    dim = _mix_hex(base, BG, 0.45)
+    bright = _mix_hex(base, "#FFFFFF", 0.30)
+    return _mix_hex(dim, bright, t)
 
 
 def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kwargs):
@@ -1163,7 +1192,7 @@ def apply_window_style(root) -> None:
         dwm.DwmSetWindowAttribute.restype = ctypes.c_long
         hwnd = ctypes.c_void_p(_window_hwnd(root))
 
-        dark = ctypes.c_int(0)
+        dark = ctypes.c_int(1)
         for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE（旧版本用 19）
             if dwm.DwmSetWindowAttribute(
                     hwnd, attr, ctypes.byref(dark), ctypes.sizeof(dark)) == 0:
@@ -1314,7 +1343,7 @@ class App:
     def _build_header(self):
         c = self.canvas
         # 左上角小电池标
-        round_rect(c, 22, 18, 48, 44, 8, fill="#EAF7F1", outline="#CDE8DD", width=1)
+        round_rect(c, 22, 18, 48, 44, 8, fill="#0E2B24", outline="#1F4A3E", width=1)
         round_rect(c, 29, 28, 40, 36, 2, fill=BG, outline=GREEN, width=1)
         c.create_rectangle(40, 30, 42, 34, fill=GREEN, outline="")
         c.create_polygon(34, 29, 31, 33, 34, 33, 32, 38, 38, 32, 35, 32,
@@ -1363,7 +1392,7 @@ class App:
     def _hover_pin(self, on: bool):
         c = self.canvas
         if self.pin:
-            c.itemconfigure(self.btn_pin_bg, fill="#E3EEFD")
+            c.itemconfigure(self.btn_pin_bg, fill="#14355C")
         else:
             c.itemconfigure(self.btn_pin_bg, fill=BTN_HOVER if on else BG)
 
@@ -1379,7 +1408,7 @@ class App:
 
         # 设备小方块
         tile = round_rect(c, 30, y + 2, 64, y + 36, 10,
-                          fill="#F4F7FA", outline="#E2E8F0", width=1)
+                          fill="#1A2233", outline="#28354C", width=1)
         items.append(tile)
         if kind == "keyboard":
             items.append(round_rect(c, 36, y + 11, 58, y + 26, 3,
@@ -1404,11 +1433,18 @@ class App:
         pct_unit = c.create_text(444, y + 56, text="", anchor="sw",
                                  fill=DIM, font=self.unit_font)
 
-        # 圆头细进度条；数字百分比始终保留
+        # 圆头细进度条；数字百分比始终保留。深色科技：渐变填充 + 头部光点
         track = c.create_line(76, y + 46, 340, y + 46, fill=TRACK, width=6,
                               capstyle="round")
-        bar = c.create_line(76, y + 46, 76, y + 46, fill=GREEN, width=6,
-                            capstyle="round")
+        bar_segs = []
+        for i in range(BAR_SEGS):
+            x0 = 76 + (340 - 76) * i / BAR_SEGS
+            x1 = 76 + (340 - 76) * (i + 1) / BAR_SEGS
+            seg = c.create_line(x0, y + 46, x1, y + 46, fill=GREEN, width=6,
+                                capstyle="butt", state="hidden")
+            bar_segs.append(seg)
+        bar_tip = c.create_oval(73, y + 43, 79, y + 49, fill=GREEN, outline="",
+                                state="hidden")
 
         sdot = c.create_oval(76, y + 57, 82, y + 63, fill=DIM, outline="")
         stxt = c.create_text(88, y + 60, text="正在检测", anchor="w",
@@ -1421,13 +1457,13 @@ class App:
 
         # 胶囊默认隐藏，只在充电/低电/未连接/未适配时出现
         pill = round_rect(c, 76, y + 24, 132, y + 42, 9,
-                          fill="#F1F4F8", outline="")
+                          fill="#1B2536", outline="")
         pill_txt = c.create_text(104, y + 33, text="", anchor="center",
                                  fill=MUTED, font=(FONT, 8))
         c.itemconfigure(pill, state="hidden")
         c.itemconfigure(pill_txt, state="hidden")
 
-        items += [name_txt, pct_txt, pct_unit, track, bar,
+        items += [name_txt, pct_txt, pct_unit, track, *bar_segs, bar_tip,
                   sdot, stxt, fb_txt, pill, pill_txt]
         for item in items:
             c.addtag_withtag(tag, item)
@@ -1444,7 +1480,8 @@ class App:
         self.rows[key] = {
             "bg": bg, "tile": tile, "name_txt": name_txt,
             "pct_txt": pct_txt, "pct_unit": pct_unit,
-            "bar": bar, "pill": pill, "pill_txt": pill_txt,
+            "bar_segs": bar_segs, "bar_tip": bar_tip,
+            "pill": pill, "pill_txt": pill_txt,
             "sdot": sdot, "stxt": stxt, "fb_txt": fb_txt, "tip_text": "",
         }
 
@@ -1452,6 +1489,13 @@ class App:
         c = self.canvas
         self.updated_txt = c.create_text(22, 264, text="正在读取设备…",
                                          anchor="nw", fill=MUTED, font=(FONT, 8))
+        self.update_txt = c.create_text(396, 264, text="检查更新", anchor="ne",
+                                       fill=DIM, font=(FONT, 8))
+        c.tag_bind(self.update_txt, "<Button-1>", lambda e: self._check_update_click())
+        c.tag_bind(self.update_txt, "<Enter>",
+                   lambda e: c.itemconfigure(self.update_txt, fill=BLUE))
+        c.tag_bind(self.update_txt, "<Leave>",
+                   lambda e: c.itemconfigure(self.update_txt, fill=DIM))
         self.scan_txt = c.create_text(448, 264, text="扫描设备", anchor="ne",
                                       fill=DIM, font=(FONT, 8))
         c.tag_bind(self.scan_txt, "<Button-1>", lambda e: self._scan_devices())
@@ -1573,7 +1617,7 @@ class App:
         ).pack(fill="x", padx=14, pady=(0, 8))
 
         self._fb_text = tk.Text(win, width=74, height=18, wrap="none",
-                                bg="#FFFFFF", fg=TEXT, font=("Consolas", 8),
+                                bg="#0B1120", fg=TEXT, font=("Consolas", 8),
                                 padx=10, pady=8, relief="solid", bd=1,
                                 highlightthickness=0)
         self._fb_text.pack(fill="both", expand=True, padx=14)
@@ -1587,19 +1631,19 @@ class App:
         bar = tk.Frame(win, bg=PANEL)
         bar.pack(fill="x", padx=14, pady=(0, 12))
         send = tk.Button(bar, text="发送给开发者", command=self._fb_send,
-                         bg="#E3EEFD", fg=BLUE, activebackground="#D5E7FB",
+                         bg="#122A42", fg=BLUE, activebackground="#1B3A5C",
                          activeforeground=BLUE, relief="flat", font=(FONT, 9),
                          padx=12, pady=5)
         copy = tk.Button(bar, text="复制报告", command=self._fb_copy,
-                         bg="#EAF0F7", fg=TEXT, activebackground="#DCE7F2",
+                         bg="#1B2740", fg=TEXT, activebackground="#24324A",
                          activeforeground=TEXT, relief="flat", font=(FONT, 9),
                          padx=12, pady=5)
         save = tk.Button(bar, text="保存为文件", command=self._fb_save,
-                         bg="#EAF0F7", fg=TEXT, activebackground="#DCE7F2",
+                         bg="#1B2740", fg=TEXT, activebackground="#24324A",
                          activeforeground=TEXT, relief="flat", font=(FONT, 9),
                          padx=12, pady=5)
         close = tk.Button(bar, text="关闭", command=self._fb_close,
-                          bg="#EAF0F7", fg=TEXT, activebackground="#DCE7F2",
+                          bg="#1B2740", fg=TEXT, activebackground="#24324A",
                           activeforeground=TEXT, relief="flat", font=(FONT, 9),
                           padx=12, pady=5)
         send.pack(side="left")
@@ -1705,11 +1749,111 @@ class App:
                 self._fb_set_status(f"打开浏览器失败: {e!r}")
 
 
+    # ---------- 检查更新 ----------
+    def _check_update_click(self):
+        if getattr(self, "_checking", False):
+            return
+        self._checking = True
+        self.canvas.itemconfigure(self.update_txt, text="检查中…")
+
+        def run():
+            try:
+                info = check_update()
+            except Exception as e:
+                self.root.after(0, lambda: self._update_prompt(None, str(e)))
+                return
+            self.root.after(0, lambda: self._update_prompt(info, None))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _update_prompt(self, info, err):
+        self._checking = False
+        self.canvas.itemconfigure(self.update_txt, text="检查更新")
+        if err:
+            messagebox.showwarning("检查更新", f"检查更新失败：{err}")
+            return
+        latest = str((info or {}).get("version") or "").strip()
+        if not latest:
+            messagebox.showwarning("检查更新", "无法获取版本信息。")
+            return
+        if _version_tuple(latest) <= _version_tuple(APP_VERSION):
+            messagebox.showinfo("检查更新", f"已是最新版本 v{APP_VERSION}")
+            return
+        dl = (info or {}).get("download_url") or ""
+        notes = str((info or {}).get("notes") or "").strip()
+        msg = f"发现新版本 v{latest}（当前 v{APP_VERSION}）"
+        if notes:
+            msg += "\n\n更新内容：\n" + notes
+        msg += "\n\n是否下载并更新？"
+        if not messagebox.askyesno("发现新版本", msg):
+            return
+        self._download_update(latest, dl)
+
+    def _download_update(self, latest, url):
+        if not url:
+            messagebox.showerror("更新", "没有可用的下载地址。")
+            return
+        exe = _exe_path()
+        if not exe:
+            messagebox.showinfo("更新", f"检测到新版本 v{latest}。\n当前为源码运行，请手动下载更新。")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("更新")
+        win.configure(bg=PANEL)
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+        lbl = tk.Label(win, text=f"正在下载 v{latest}…", bg=PANEL, fg=TEXT,
+                       font=(FONT, 10), padx=28, pady=16)
+        lbl.pack()
+        win.update_idletasks()
+
+        new_path = os.path.join(os.path.dirname(exe), "_battery_update.tmp")
+
+        def progress(done, total):
+            if total:
+                pct = min(99, int(done * 100 / total))
+                lbl.config(text=f"正在下载 v{latest}… {pct}%")
+            else:
+                lbl.config(text=f"正在下载 v{latest}… {done // 1024} KB")
+            win.update_idletasks()
+
+        def run():
+            try:
+                download_file(url, new_path, progress)
+                self.root.after(0, lambda: self._finish_update(win, exe, new_path, latest))
+            except Exception as e:
+                self.root.after(0, lambda: self._update_download_fail(win, str(e)))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_update(self, win, exe, new_path, latest):
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        try:
+            _apply_update(exe, new_path)
+        except Exception as e:
+            messagebox.showerror("更新", f"准备替换失败：{e!r}")
+            return
+        messagebox.showinfo("更新", f"v{latest} 下载完成，程序即将自动重启。")
+        self.root.destroy()
+
+    def _update_download_fail(self, win, msg):
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        messagebox.showerror("更新", f"下载失败：{msg}")
+
+
     def _toggle_pin(self):
         self.pin = not self.pin
         self.root.attributes("-topmost", self.pin)
         c = self.canvas
-        c.itemconfigure(self.btn_pin_bg, fill="#E3EEFD" if self.pin else BG)
+        c.itemconfigure(self.btn_pin_bg, fill="#14355C" if self.pin else BG)
         c.itemconfigure(self.pin_icon, fill=BLUE if self.pin else MUTED)
 
     # ---------- 刷新 ----------
@@ -1747,54 +1891,67 @@ class App:
             c.coords(row["pct_unit"], unit_x * s, (top + 56) * s)
             c.coords(row["pct_txt"], (unit_x - 3) * s, (top - 4) * s)
 
-        # 进度条
+        # 进度条：渐变填充 + 头部光点
+        segs = row["bar_segs"]
         if state.online and state.battery is not None:
             pct = max(0, min(100, state.battery))
             bar_w = (340 - 76) * pct / 100.0
-            c.itemconfigure(row["bar"], state="normal", fill=bar_color)
-            c.coords(row["bar"], 76 * s, (top + 46) * s,
-                     (76 + max(2.0, bar_w)) * s, (top + 46) * s)
+            n = int(round(len(segs) * pct / 100.0))
+            for i, seg in enumerate(segs):
+                if i < n:
+                    t = (i / (len(segs) - 1)) if len(segs) > 1 else 1.0
+                    c.itemconfigure(seg, state="normal",
+                                    fill=_bar_gradient(bar_color, t))
+                else:
+                    c.itemconfigure(seg, state="hidden")
+            tip_x = 76 + max(2.0, bar_w)
+            c.coords(row["bar_tip"], (tip_x - 4) * s, (top + 42) * s,
+                     (tip_x + 4) * s, (top + 50) * s)
+            c.itemconfigure(row["bar_tip"], state="normal",
+                            fill=_bar_gradient(bar_color, 1.0))
         else:
-            c.itemconfigure(row["bar"], state="hidden")
+            for seg in segs:
+                c.itemconfigure(seg, state="hidden")
+            c.itemconfigure(row["bar_tip"], state="hidden")
 
         # 状态：正常只留圆点 + 文字；胶囊只给特殊状态
         status_text = state.status
         show_pill = False
         pill_text = ""
-        pill_fill = "#F1F4F8"
+        pill_fill = "#1B2536"
         pill_fg = MUTED
         dot_color = DIM
         if state.online:
             if state.charging:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "充电中", "#E9F2FE", BLUE
+                pill_text, pill_fill, pill_fg = "充电中", "#122A42", BLUE
                 dot_color = BLUE
                 if status_text.strip() == "充电中":
                     status_text = "2.4G 已连接"
             elif state.battery is not None and state.battery <= 20:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "电量低", "#FBF1DF", AMBER
+                pill_text, pill_fill, pill_fg = "电量低", "#2B2112", AMBER
                 dot_color = AMBER
             else:
                 dot_color = GREEN
         else:
             if "暂不支持" in status_text:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "未适配", "#FBF1DF", AMBER
+                pill_text, pill_fill, pill_fg = "未适配", "#2B2112", AMBER
                 dot_color = AMBER
             else:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "未连接", "#F1F4F8", MUTED
+                pill_text, pill_fill, pill_fg = "未连接", "#1B2536", MUTED
                 dot_color = DIM
 
         if state.online and state.charging:
-            tile_line = "#BFD8F7"
+            tile_line = "#2C4A66"
         elif state.online and state.battery is not None and state.battery <= 20:
-            tile_line = "#E8D0A8"
+            tile_line = "#4A3A1E"
         elif not state.online and "暂不支持" in status_text:
-            tile_line = "#E4D3AF"
+            tile_line = "#4A3E22"
         else:
-            tile_line = "#E2E8F0"
+            tile_line = "#28354C"
         c.itemconfigure(row["tile"], outline=tile_line)
         c.itemconfigure(row["sdot"], fill=dot_color)
         c.itemconfigure(row["stxt"], text=_elide(status_text, 24),
@@ -2027,6 +2184,85 @@ def upload_report(text: str, raw: bytes) -> tuple[bool, str]:
             return True, f"已发送（HTTP {resp.status}）"
     except Exception as e:
         return False, f"发送失败: {e!r}"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """把 'v1.3.2' / '1.3.2' / '1.3.2-beta' 解析成可比较的 (1,3,2)。"""
+    v = (v or "").strip().lstrip("vV")
+    parts = []
+    for seg in v.split("."):
+        num = ""
+        for ch in seg:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        parts.append(int(num) if num else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def check_update() -> dict:
+    """读取仓库里的 version.json，返回 {'version','download_url','notes'}；失败抛异常。"""
+    url = f"https://api.github.com/repos/{UPDATE_REPO}/contents/version.json"
+    req = urllib.request.Request(
+        url, headers={"User-Agent": UPDATE_UA,
+                      "Accept": "application/vnd.github+json",
+                      "Cache-Control": "no-cache"},
+    )
+    with urllib.request.urlopen(req, timeout=UPDATE_TIMEOUT) as resp:
+        meta = json.loads(resp.read().decode("utf-8", "replace"))
+    raw = base64.b64decode(meta.get("content", "")).decode("utf-8", "replace")
+    return json.loads(raw)
+
+
+def download_file(url: str, dest: str, progress_cb=None) -> int:
+    """下载到 dest，返回字节数；progress_cb(done, total) 周期回调。"""
+    req = urllib.request.Request(url, headers={"User-Agent": UPDATE_UA})
+    with urllib.request.urlopen(req, timeout=UPDATE_DOWNLOAD_TIMEOUT) as resp:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        with open(dest, "wb") as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if progress_cb:
+                    progress_cb(done, total)
+    return done
+
+
+def _exe_path() -> str | None:
+    """冻结成 exe 时返回 exe 自身路径，否则返回 None（源码运行不替换自己）。"""
+    if getattr(sys, "frozen", False):
+        return sys.executable
+    return None
+
+
+def _apply_update(exe_path: str, new_path: str) -> None:
+    """写一个批处理：等程序退出后替换 exe、重启、自我删除。"""
+    script = (
+        "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        ":wait\r\n"
+        "timeout /t 1 /nobreak >nul\r\n"
+        'del /f /q "%~1" >nul 2>&1\r\n'
+        'if exist "%~1" goto wait\r\n'
+        'move /y "%~2" "%~1" >nul\r\n'
+        'start "" "%~1"\r\n'
+        'del "%~f0" >nul 2>&1\r\n'
+    )
+    bat = os.path.join(os.path.dirname(exe_path), "_update.bat")
+    with open(bat, "w", encoding="utf-8") as f:
+        f.write(script)
+    subprocess.Popen(
+        ["cmd", "/c", bat, exe_path, new_path],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        close_fds=True,
+    )
 
 
 def scan_hid() -> str:

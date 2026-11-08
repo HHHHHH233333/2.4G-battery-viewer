@@ -56,7 +56,7 @@ APP_VERSION = "1.3.0"
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
 # 没配时回退为“复制报告 + 打开 GitHub Issue 预填页”，同样可用。
 FEEDBACK_REPO = "HHHHHH233333/my-repository"
-FEEDBACK_ENDPOINT = ""
+FEEDBACK_ENDPOINT = "https://battery-feedback.2056405975.workers.dev"
 FEEDBACK_TIMEOUT = 15
 FEEDBACK_UA = "2.4G-battery-viewer/" + APP_VERSION
 

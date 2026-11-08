@@ -38,15 +38,21 @@ Corsair、A4Tech / Bloody 等品牌大多使用私有 HID 协议，
 
 ### 一键上传
 
-当前版本已内置接收端（Cloudflare Worker），报告会自动变成 my-repository 里的 Issue。
-由于 workers.dev 在国内部分网络直连不通，程序会先尝试上传，连不上时自动回退为「复制 + 打开 Issue 预填页」。
+当前版本已内置接收端（阿里云函数计算 FC，国内直连），报告会自动变成 my-repository 里的 Issue。
+程序会先尝试上传，连不上时自动回退为「复制 + 打开 Issue 预填页」。
 
-想换成自己的接收端（换仓库 / 换域名），改 battery_viewer.py 顶部的 FEEDBACK_ENDPOINT、FEEDBACK_REPO 后重新打包即可。部署自己的 Worker：
+想换成自己的接收端（换仓库 / 换地址），改 battery_viewer.py 顶部的 FEEDBACK_ENDPOINT、FEEDBACK_REPO 后重新打包即可。两种部署方式任选：
 
-1. 在 GitHub 建一个 fine-grained token，只给目标仓库的 Issues: Write 权限。
-2. 到 Cloudflare Workers 新建 Worker，粘贴 feedback-worker.js 内容，点 Deploy。
-3. 在 Worker 的 Settings → Variables and Secrets 加 Secret：GH_TOKEN（值 = 上一步的 token）。
-4. 把 Worker 地址填进 FEEDBACK_ENDPOINT，重新打包。
+**阿里云函数计算 FC（国内直连，推荐）**：部署 feedback-aliyun.js
+1. 在 GitHub 建一个 classic token，只勾 repo（或 fine-grained 只给目标仓库 Issues: Write）。
+2. 阿里云函数计算控制台创建「Web 函数」，运行时 Node.js 18，入口 index.handler，粘贴 feedback-aliyun.js 内容。
+3. 在环境变量加 GH_TOKEN（值 = 上一步的 token）。
+4. 触发器「认证方式」改成「无需认证」，把访问地址（https://xxx.cn-hangzhou.fcapp.run）填进 FEEDBACK_ENDPOINT，重新打包。
+
+**Cloudflare Worker（需自有域名才能国内直连）**：部署 feedback-worker.js
+1. 到 Cloudflare Workers 新建 Worker，粘贴 feedback-worker.js 内容，点 Deploy。
+2. 在 Settings → Variables and Secrets 加 Secret：GH_TOKEN。
+3. 把 Worker 地址填进 FEEDBACK_ENDPOINT，重新打包。
 
 ## 双击报 “Could not create temporary directory!” 怎么办
 
@@ -188,4 +194,5 @@ signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 ^
 - `hid_win.py`：纯 ctypes 的 Windows HID 封装
 - `app.manifest`：DPI 感知声明
 - `app.ico` / `make_icon.py`：图标
-- `feedback-worker.js`：设备反馈接收端（Cloudflare Worker，可选，用于真正的一键上传）
+- `feedback-aliyun.js`：设备反馈接收端（阿里云函数计算 FC，国内直连，当前默认）
+- `feedback-worker.js`：设备反馈接收端（Cloudflare Worker，可选）

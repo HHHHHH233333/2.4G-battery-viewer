@@ -52,7 +52,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -1255,9 +1255,9 @@ class App:
         self._hover_key = None
         self.tip = None
         self.W = 470
-        self.H = 296
-        self.ROW1_Y = 86
-        self.ROW2_Y = 174
+        self.H = 312
+        self.TILE_Y = 60
+        self.TILE_H = 216
         self.pct_font = None
         self.unit_font = None
         self.subtitle_txt = None
@@ -1313,7 +1313,7 @@ class App:
         self.text_family = text_family
         self.icon_font = (icon_family, 13)
         self.pct_font = tkfont.Font(root=root, family=num_family,
-                                    size=34, weight="normal")
+                                    size=30, weight="normal")
         self.unit_font = tkfont.Font(root=root, family=text_family,
                                      size=12, weight="normal")
         root.resizable(False, False)
@@ -1324,8 +1324,8 @@ class App:
         self.canvas.pack(fill="both", expand=True)
 
         self._build_header()
-        self._build_row("kb", self.ROW1_Y, "keyboard")
-        self._build_row("mouse", self.ROW2_Y, "mouse")
+        self._build_row("kb", 22, "keyboard")
+        self._build_row("mouse", 242, "mouse")
         self._build_footer()
         self._build_tooltip()
         # 所有静态坐标按 DPI 放大；字体已经由 Tk 按 DPI 放大，不需要再乘。
@@ -1396,113 +1396,102 @@ class App:
         else:
             c.itemconfigure(self.btn_pin_bg, fill=BTN_HOVER if on else BG)
 
-    def _build_row(self, key, y, kind):
+    def _build_row(self, key, tx, kind):
         c = self.canvas
         tag = f"row_{key}"
         items = []
+        ty = self.TILE_Y
+        cx = tx + 103
 
-        # 圆角悬停底色，和面板同色；移入后稍微提亮
-        bg = round_rect(c, 22, y - 6, 448, y + 76, 12,
+        # 方块卡片（深色科技面板）
+        bg = round_rect(c, tx, ty, tx + 206, ty + 216, 14,
                         fill=PANEL, outline="")
         items.append(bg)
 
-        # 设备小方块
-        tile = round_rect(c, 30, y + 2, 64, y + 36, 10,
-                          fill="#1A2233", outline="#28354C", width=1)
-        items.append(tile)
+        # 设备图标（居中）
+        cy = ty + 50
         if kind == "keyboard":
-            items.append(round_rect(c, 36, y + 11, 58, y + 26, 3,
+            items.append(round_rect(c, cx - 21, cy - 13, cx + 21, cy + 13, 6,
                                     fill="", outline=MUTED, width=1))
-            for dx in (41, 46, 51):
-                items.append(c.create_line(dx, y + 16, dx + 2, y + 16,
+            for ry in (-5, 0, 5):
+                items.append(c.create_line(cx - 15, cy + ry, cx + 15, cy + ry,
                                            fill=MUTED, capstyle="round"))
-            items.append(c.create_line(42, y + 22, 52, y + 22,
+            items.append(c.create_line(cx - 9, cy + 10, cx + 9, cy + 10,
                                        fill=MUTED, capstyle="round"))
             name = "自动识别键盘"
         else:
-            items.append(round_rect(c, 41, y + 9, 53, y + 28, 6,
+            items.append(round_rect(c, cx - 11, cy - 15, cx + 11, cy + 15, 8,
                                     fill="", outline=MUTED, width=1))
-            items.append(c.create_line(47, y + 10, 47, y + 17,
+            items.append(c.create_line(cx, cy - 10, cx, cy - 2,
                                        fill=MUTED, capstyle="round"))
             name = "自动识别鼠标"
 
-        name_txt = c.create_text(76, y + 4, text=name, anchor="nw", fill=TEXT,
-                                 font=(FONT, 11))
-        pct_txt = c.create_text(444, y - 4, text="--", anchor="ne",
+        name_txt = c.create_text(cx, ty + 84, text=name, anchor="center",
+                                 fill=TEXT, font=(FONT, 10))
+        pct_txt = c.create_text(cx, ty + 128, text="--", anchor="center",
                                 fill=DIM, font=self.pct_font)
-        pct_unit = c.create_text(444, y + 56, text="", anchor="sw",
+        pct_unit = c.create_text(cx, ty + 128, text="", anchor="nw",
                                  fill=DIM, font=self.unit_font)
 
-        # 圆头细进度条；数字百分比始终保留。深色科技：渐变填充 + 头部光点
-        track = c.create_line(76, y + 46, 340, y + 46, fill=TRACK, width=6,
-                              capstyle="round")
+        # 渐变进度条 + 头部光点
+        track = c.create_line(tx + 34, ty + 160, tx + 172, ty + 160,
+                              fill=TRACK, width=6, capstyle="round")
         bar_segs = []
         for i in range(BAR_SEGS):
-            x0 = 76 + (340 - 76) * i / BAR_SEGS
-            x1 = 76 + (340 - 76) * (i + 1) / BAR_SEGS
-            seg = c.create_line(x0, y + 46, x1, y + 46, fill=GREEN, width=6,
-                                capstyle="butt", state="hidden")
+            x0 = tx + 34 + (172 - 34) * i / BAR_SEGS
+            x1 = tx + 34 + (172 - 34) * (i + 1) / BAR_SEGS
+            seg = c.create_line(x0, ty + 160, x1, ty + 160, fill=GREEN,
+                                width=6, capstyle="butt", state="hidden")
             bar_segs.append(seg)
-        bar_tip = c.create_oval(73, y + 43, 79, y + 49, fill=GREEN, outline="",
-                                state="hidden")
+        bar_tip = c.create_oval(tx + 31, ty + 157, tx + 37, ty + 163,
+                                fill=GREEN, outline="", state="hidden")
 
-        sdot = c.create_oval(76, y + 57, 82, y + 63, fill=DIM, outline="")
-        stxt = c.create_text(88, y + 60, text="正在检测", anchor="w",
+        sdot = c.create_oval(cx - 42, ty + 185, cx - 36, ty + 191,
+                             fill=DIM, outline="")
+        stxt = c.create_text(cx, ty + 188, text="正在检测", anchor="center",
                              fill=MUTED, font=(FONT, 8))
 
-        # 只有“未适配”才出现的反馈入口，默认隐藏
-        fb_txt = c.create_text(444, y + 60, text="此设备不适配？反馈",
-                               anchor="e", fill=BLUE, font=(FONT, 8))
-        c.itemconfigure(fb_txt, state="hidden")
-
         # 胶囊默认隐藏，只在充电/低电/未连接/未适配时出现
-        pill = round_rect(c, 76, y + 24, 132, y + 42, 9,
+        pill = round_rect(c, cx - 24, ty + 200, cx + 24, ty + 214, 8,
                           fill="#1B2536", outline="")
-        pill_txt = c.create_text(104, y + 33, text="", anchor="center",
+        pill_txt = c.create_text(cx, ty + 207, text="", anchor="center",
                                  fill=MUTED, font=(FONT, 8))
         c.itemconfigure(pill, state="hidden")
         c.itemconfigure(pill_txt, state="hidden")
 
         items += [name_txt, pct_txt, pct_unit, track, *bar_segs, bar_tip,
-                  sdot, stxt, fb_txt, pill, pill_txt]
+                  sdot, stxt, pill, pill_txt]
         for item in items:
             c.addtag_withtag(tag, item)
         c.tag_bind(tag, "<Enter>", lambda e, k=key: self._row_enter(k))
         c.tag_bind(tag, "<Leave>", lambda e, k=key: self._row_leave(k))
-        c.tag_bind(fb_txt, "<Button-1>", lambda e: self._open_feedback())
-        c.tag_bind(fb_txt, "<Enter>",
-                   lambda e: c.itemconfigure(fb_txt, fill=AMBER))
-        c.tag_bind(fb_txt, "<Leave>",
-                   lambda e: c.itemconfigure(fb_txt, fill=BLUE))
-        if key == "kb":
-            c.create_line(76, y + 80, 444, y + 80, fill=PANEL_LINE)
 
         self.rows[key] = {
-            "bg": bg, "tile": tile, "name_txt": name_txt,
+            "bg": bg, "name_txt": name_txt, "tx": tx, "ty": ty, "cx": cx,
             "pct_txt": pct_txt, "pct_unit": pct_unit,
             "bar_segs": bar_segs, "bar_tip": bar_tip,
             "pill": pill, "pill_txt": pill_txt,
-            "sdot": sdot, "stxt": stxt, "fb_txt": fb_txt, "tip_text": "",
+            "sdot": sdot, "stxt": stxt, "tip_text": "",
         }
 
     def _build_footer(self):
         c = self.canvas
-        self.updated_txt = c.create_text(22, 264, text="正在读取设备…",
+        self.updated_txt = c.create_text(22, 288, text="正在读取设备…",
                                          anchor="nw", fill=MUTED, font=(FONT, 8))
-        self.update_txt = c.create_text(396, 264, text="检查更新", anchor="ne",
-                                       fill=DIM, font=(FONT, 8))
+        self.fb_btn = c.create_text(398, 288, text="提交设备信息", anchor="ne",
+                                    fill=BLUE, font=(FONT, 8))
+        c.tag_bind(self.fb_btn, "<Button-1>", lambda e: self._open_feedback())
+        c.tag_bind(self.fb_btn, "<Enter>",
+                   lambda e: c.itemconfigure(self.fb_btn, fill=AMBER))
+        c.tag_bind(self.fb_btn, "<Leave>",
+                   lambda e: c.itemconfigure(self.fb_btn, fill=BLUE))
+        self.update_txt = c.create_text(448, 288, text="检查更新", anchor="ne",
+                                        fill=DIM, font=(FONT, 8))
         c.tag_bind(self.update_txt, "<Button-1>", lambda e: self._check_update_click())
         c.tag_bind(self.update_txt, "<Enter>",
                    lambda e: c.itemconfigure(self.update_txt, fill=BLUE))
         c.tag_bind(self.update_txt, "<Leave>",
                    lambda e: c.itemconfigure(self.update_txt, fill=DIM))
-        self.scan_txt = c.create_text(448, 264, text="扫描设备", anchor="ne",
-                                      fill=DIM, font=(FONT, 8))
-        c.tag_bind(self.scan_txt, "<Button-1>", lambda e: self._scan_devices())
-        c.tag_bind(self.scan_txt, "<Enter>",
-                   lambda e: c.itemconfigure(self.scan_txt, fill=BLUE))
-        c.tag_bind(self.scan_txt, "<Leave>",
-                   lambda e: c.itemconfigure(self.scan_txt, fill=DIM))
 
     def _build_tooltip(self):
         self.tip = tk.Toplevel(self.root)
@@ -1568,19 +1557,7 @@ class App:
             except Exception:
                 pass
 
-    def _scan_devices(self):
-        self.canvas.itemconfigure(self.scan_txt, text="扫描中…", fill=BLUE)
-        def run():
-            try:
-                scan_hid()
-            finally:
-                try:
-                    self.canvas.itemconfigure(self.scan_txt, text="扫描设备", fill=DIM)
-                except Exception:
-                    pass
-        threading.Thread(target=run, daemon=True).start()
-
-    # ---------- 设备反馈 ----------
+    # ---------- 设备反馈 ----------    # ---------- 设备反馈 ----------
     def _open_feedback(self):
         if self._fb_win is not None:
             try:
@@ -1594,7 +1571,7 @@ class App:
 
         win = tk.Toplevel(self.root)
         self._fb_win = win
-        win.title("反馈设备信息")
+        win.title("提交设备信息")
         win.configure(bg=PANEL)
         win.resizable(True, True)
         try:
@@ -1608,7 +1585,7 @@ class App:
         except Exception:
             pass
 
-        tk.Label(win, text="反馈未适配的设备", bg=PANEL, fg=TEXT,
+        tk.Label(win, text="提交设备信息", bg=PANEL, fg=TEXT,
                  font=(FONT, 11, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
         tk.Label(
             win, bg=PANEL, fg=MUTED, font=(FONT, 8), justify="left", anchor="w",
@@ -1860,11 +1837,11 @@ class App:
     def _update_card(self, key, state: DeviceState):
         c = self.canvas
         row = self.rows[key]
-        top = self.ROW1_Y if key == "kb" else self.ROW2_Y
+        tx = row["tx"]; ty = row["ty"]; cx = row["cx"]
         s = self.S
 
         if state.name:
-            c.itemconfigure(row["name_txt"], text=_elide(state.name, 18))
+            c.itemconfigure(row["name_txt"], text=_elide(state.name, 14))
 
         bar_color = BLUE if state.charging else (
             level_color(state.battery) if state.online else DIM)
@@ -1879,23 +1856,26 @@ class App:
         pct_text = "--" if state.battery is None else str(state.battery)
         c.itemconfigure(row["pct_txt"], text=pct_text, fill=pct_color)
 
-        # 数字右对齐，% 紧贴数字右侧
+        # 大号百分比：数字 + % 作为整体居中
         if state.battery is None:
             c.itemconfigure(row["pct_unit"], state="hidden")
-            c.coords(row["pct_txt"], 444 * s, (top - 4) * s)
+            c.coords(row["pct_txt"], cx * s, (ty + 128) * s)
         else:
+            num_w = self.pct_font.measure(pct_text) / s
             unit_w = self.unit_font.measure("%") / s
-            unit_x = 444 - unit_w
+            gap = 4
+            left = cx - (num_w + gap + unit_w) / 2
             c.itemconfigure(row["pct_unit"], text="%", state="normal",
                             fill=pct_color)
-            c.coords(row["pct_unit"], unit_x * s, (top + 56) * s)
-            c.coords(row["pct_txt"], (unit_x - 3) * s, (top - 4) * s)
+            c.coords(row["pct_txt"], (left + num_w / 2) * s, (ty + 128) * s)
+            c.coords(row["pct_unit"], (left + num_w + gap) * s,
+                     (ty + 122) * s)
 
         # 进度条：渐变填充 + 头部光点
         segs = row["bar_segs"]
         if state.online and state.battery is not None:
             pct = max(0, min(100, state.battery))
-            bar_w = (340 - 76) * pct / 100.0
+            bar_w = (172 - 34) * pct / 100.0
             n = int(round(len(segs) * pct / 100.0))
             for i, seg in enumerate(segs):
                 if i < n:
@@ -1904,9 +1884,9 @@ class App:
                                     fill=_bar_gradient(bar_color, t))
                 else:
                     c.itemconfigure(seg, state="hidden")
-            tip_x = 76 + max(2.0, bar_w)
-            c.coords(row["bar_tip"], (tip_x - 4) * s, (top + 42) * s,
-                     (tip_x + 4) * s, (top + 50) * s)
+            tip_x = tx + 34 + max(2.0, bar_w)
+            c.coords(row["bar_tip"], (tip_x - 4) * s, (ty + 156) * s,
+                     (tip_x + 4) * s, (ty + 164) * s)
             c.itemconfigure(row["bar_tip"], state="normal",
                             fill=_bar_gradient(bar_color, 1.0))
         else:
@@ -1944,17 +1924,8 @@ class App:
                 pill_text, pill_fill, pill_fg = "未连接", "#1B2536", MUTED
                 dot_color = DIM
 
-        if state.online and state.charging:
-            tile_line = "#2C4A66"
-        elif state.online and state.battery is not None and state.battery <= 20:
-            tile_line = "#4A3A1E"
-        elif not state.online and "暂不支持" in status_text:
-            tile_line = "#4A3E22"
-        else:
-            tile_line = "#28354C"
-        c.itemconfigure(row["tile"], outline=tile_line)
         c.itemconfigure(row["sdot"], fill=dot_color)
-        c.itemconfigure(row["stxt"], text=_elide(status_text, 24),
+        c.itemconfigure(row["stxt"], text=_elide(status_text, 20),
                         fill=BLUE if state.charging else MUTED)
         if show_pill:
             c.itemconfigure(row["pill"], state="normal", fill=pill_fill)
@@ -1963,12 +1934,6 @@ class App:
         else:
             c.itemconfigure(row["pill"], state="hidden")
             c.itemconfigure(row["pill_txt"], state="hidden")
-
-        # “反馈”入口只在未适配时出现
-        if not state.online and "暂不支持" in status_text:
-            c.itemconfigure(row["fb_txt"], state="normal")
-        else:
-            c.itemconfigure(row["fb_txt"], state="hidden")
 
         # 技术细节只放在悬停提示里
         parts = []

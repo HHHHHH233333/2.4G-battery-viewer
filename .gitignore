@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+_MEI*/
+
+# 旧便携版（已停止维护）
+2.4G电量-便携版/
+2.4G电量-便携版.zip
+
+# 本机设备扫描结果（含本机 HID 信息，不入库）
+设备扫描.txt
+
+# 系统
+Thumbs.db
+Desktop.ini

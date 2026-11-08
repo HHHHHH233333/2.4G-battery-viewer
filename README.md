@@ -29,23 +29,24 @@ Corsair、A4Tech / Bloody 等品牌大多使用私有 HID 协议，
 
 未适配设备那一行会出现蓝色 **此设备不适配？反馈**，点它打开反馈窗：
 
-- **发送给开发者**：把报告上传给我（没配接收端时回退为复制 + 打开 Issue）
+- **发送给开发者**：一键上传，自动在 my-repository 生成 Issue；连不上时自动回退为复制 + 打开 Issue
 - **复制报告**：复制到剪贴板，方便你用 QQ / 微信发我
 - **保存为文件**：存到桌面，两个文件（可读文本 + 原始报告描述符）
 
 报告只含 HID 元数据：VID/PID、usage、报告长度、设备名、Feature/Input 能力表。
 **不含**键盘按键内容、文件名、剪贴板、网络信息或个人文件；只有点“发送”才联网。
 
-### 一键上传（可选）
+### 一键上传
 
-默认不依赖服务器。想要真正的“点一下就传”，部署同目录的 feedback-worker.js：
+当前版本已内置接收端（Cloudflare Worker），报告会自动变成 my-repository 里的 Issue。
+由于 workers.dev 在国内部分网络直连不通，程序会先尝试上传，连不上时自动回退为「复制 + 打开 Issue 预填页」。
 
-1. 在 GitHub 建一个 fine-grained token，只给 my-repository 的 Issues: Write 权限。
+想换成自己的接收端（换仓库 / 换域名），改 battery_viewer.py 顶部的 FEEDBACK_ENDPOINT、FEEDBACK_REPO 后重新打包即可。部署自己的 Worker：
+
+1. 在 GitHub 建一个 fine-grained token，只给目标仓库的 Issues: Write 权限。
 2. 到 Cloudflare Workers 新建 Worker，粘贴 feedback-worker.js 内容，点 Deploy。
-3. 在 Worker 的 Settings → Variables 里加 Secret：GH_TOKEN（值 = 上一步的 token）。
-4. 把 Worker 的 https://xxx.workers.dev 地址填进 battery_viewer.py 顶部 FEEDBACK_ENDPOINT，重新打包。
-
-之后别人点“发送给开发者”，报告会直接变成 my-repository 里的一个 Issue。
+3. 在 Worker 的 Settings → Variables and Secrets 加 Secret：GH_TOKEN（值 = 上一步的 token）。
+4. 把 Worker 地址填进 FEEDBACK_ENDPOINT，重新打包。
 
 ## 双击报 “Could not create temporary directory!” 怎么办
 

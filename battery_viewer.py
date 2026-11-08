@@ -52,7 +52,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -1016,8 +1016,20 @@ class Monitor:
                         None, "自动识别键盘"))
 
         try:
-            with HidDevice(target.path, write=False) as dev:
-                raw = dev.get_feature_report(0, 65)
+            with HidDevice(target.path, write=True) as dev:
+                # 0x3151 同族接收器（VGN/ATK/AJAZZ 共用）：Feature Report 不会主动
+                # 更新，必须先 SET_FEATURE 发 0xF7 状态轮询让 2.4G 遥测链路上线，
+                # 之后 GET_FEATURE 才能读到电量（否则一直是全 0）。
+                poll = bytearray(65)
+                poll[0] = 0x00          # report id
+                poll[1] = 0xF7          # 状态轮询 opcode
+                raw = b""
+                for _ in range(3):
+                    dev.set_feature_report(bytes(poll))
+                    time.sleep(0.03)
+                    raw = dev.get_feature_report(0, 65)
+                    if len(raw) >= 8 and raw[2] != 0:
+                        break
         except (HidError, OSError, Exception):
             return DeviceState(False, None, False, "读取失败",
                                "VGN Neon75 · 3151:5038",
@@ -1032,9 +1044,14 @@ class Monitor:
             return DeviceState(False, None, False, "数据异常",
                                "VGN Neon75 · 3151:5038",
                                None, "VGN 霓虹 Neon75")
-        charging = raw[10] == 1
-        status = "充电中" if charging else "2.4G 已连接"
-        return DeviceState(True, pct, charging, status,
+        # 全 0 = 2.4G 遥测链路没上线（键盘休眠 / 没连上），不是真的 0%
+        if pct == 0 and not any(raw[i] for i in (4, 5, 6, 7)):
+            return DeviceState(False, None, False, "未连接",
+                               "VGN Neon75 · 3151:5038",
+                               None, "VGN 霓虹 Neon75")
+        # 2.4G 下不猜充电状态（报告里没有可靠的充电标志）
+        status = "2.4G 已连接"
+        return DeviceState(True, pct, False, status,
                            f"VGN Neon75 · {target.vid:04X}:{target.pid:04X}",
                            time.time(), "VGN 霓虹 Neon75")
 

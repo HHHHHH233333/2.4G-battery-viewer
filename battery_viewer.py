@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import json
+import math
 import os
 import subprocess
 import sys
@@ -52,7 +53,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.6.0"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -86,6 +87,7 @@ RED = "#FF6B6B"
 BLUE = "#4DA6FF"
 TRACK = "#1A2233"
 ACCENT = "#35C4E8"
+ACCENT_MOUSE = "#A78BFA"
 BAR_SEGS = 24
 
 FONT = "Microsoft YaHei UI"
@@ -1330,9 +1332,9 @@ class App:
         self.text_family = text_family
         self.icon_font = (icon_family, 13)
         self.pct_font = tkfont.Font(root=root, family=num_family,
-                                    size=30, weight="normal")
+                                    size=22, weight="normal")
         self.unit_font = tkfont.Font(root=root, family=text_family,
-                                     size=12, weight="normal")
+                                     size=10, weight="normal")
         root.resizable(False, False)
         center_on_active_monitor(root, win_w, win_h)
 
@@ -1359,6 +1361,13 @@ class App:
     # ---------- 绘制 ----------
     def _build_header(self):
         c = self.canvas
+        # 窗口背景：顶部略亮的纵向渐变（先画，垫在所有元素下面）
+        for _i in range(26):
+            _t = _i / 25.0
+            _col = _mix_hex("#0E1523", BG, _t)
+            _y0 = self.H * _i / 26.0
+            _y1 = self.H * (_i + 1) / 26.0 + 1
+            c.create_rectangle(0, _y0, self.W, _y1, fill=_col, outline="")
         # 左上角小电池标
         round_rect(c, 22, 18, 48, 44, 8, fill="#0E2B24", outline="#1F4A3E", width=1)
         round_rect(c, 29, 28, 40, 36, 2, fill=BG, outline=GREEN, width=1)
@@ -1419,64 +1428,69 @@ class App:
         items = []
         ty = self.TILE_Y
         cx = tx + 103
+        accent = ACCENT if kind == "keyboard" else ACCENT_MOUSE
+        ring_c = ty + 106
+        ring_r = 30
 
-        # 方块卡片（深色科技面板）
+        # 方块卡片 + 顶部主题色高光线
         bg = round_rect(c, tx, ty, tx + 206, ty + 216, 14,
                         fill=PANEL, outline="")
         items.append(bg)
+        items.append(round_rect(c, tx + 18, ty + 5, tx + 188, ty + 8, 2,
+                                fill=_mix_hex(accent, PANEL, 0.4), outline=""))
 
-        # 设备图标（居中）
-        cy = ty + 50
+        # 设备图标：主题色光晕 + 图标
+        glow = _mix_hex(accent, PANEL, 0.6)
+        items.append(c.create_oval(cx - 26, ty + 12, cx + 26, ty + 64,
+                                   fill=glow, outline=""))
+        cy = ty + 38
         if kind == "keyboard":
             items.append(round_rect(c, cx - 21, cy - 13, cx + 21, cy + 13, 6,
-                                    fill="", outline=MUTED, width=1))
+                                    fill="", outline=accent, width=1))
             for ry in (-5, 0, 5):
                 items.append(c.create_line(cx - 15, cy + ry, cx + 15, cy + ry,
-                                           fill=MUTED, capstyle="round"))
+                                            fill=accent, capstyle="round"))
             items.append(c.create_line(cx - 9, cy + 10, cx + 9, cy + 10,
-                                       fill=MUTED, capstyle="round"))
+                                        fill=accent, capstyle="round"))
             name = "自动识别键盘"
         else:
             items.append(round_rect(c, cx - 11, cy - 15, cx + 11, cy + 15, 8,
-                                    fill="", outline=MUTED, width=1))
+                                    fill="", outline=accent, width=1))
             items.append(c.create_line(cx, cy - 10, cx, cy - 2,
-                                       fill=MUTED, capstyle="round"))
+                                        fill=accent, capstyle="round"))
             name = "自动识别鼠标"
 
-        name_txt = c.create_text(cx, ty + 84, text=name, anchor="center",
-                                 fill=TEXT, font=(FONT, 10))
-        pct_txt = c.create_text(cx, ty + 128, text="--", anchor="center",
+        # 环形电量：轨道 + 填充弧 + 顶端光点
+        bb = (cx - ring_r, ring_c - ring_r, cx + ring_r, ring_c + ring_r)
+        track = c.create_arc(*bb, start=0, extent=359.9, style="arc",
+                             width=7, outline=TRACK)
+        arc = c.create_arc(*bb, start=90, extent=0, style="arc",
+                           width=7, outline=DIM, state="hidden")
+        tip = c.create_oval(cx - 5, ring_c - ring_r - 5, cx + 5,
+                            ring_c - ring_r + 5, fill=DIM, outline="",
+                            state="hidden")
+
+        name_txt = c.create_text(cx, ty + 152, text=name, anchor="center",
+                                 fill=MUTED, font=(FONT, 9))
+        pct_txt = c.create_text(cx, ring_c, text="--", anchor="center",
                                 fill=DIM, font=self.pct_font)
-        pct_unit = c.create_text(cx, ty + 128, text="", anchor="nw",
+        pct_unit = c.create_text(cx, ring_c, text="", anchor="nw",
                                  fill=DIM, font=self.unit_font)
 
-        # 渐变进度条 + 头部光点
-        track = c.create_line(tx + 34, ty + 160, tx + 172, ty + 160,
-                              fill=TRACK, width=6, capstyle="round")
-        bar_segs = []
-        for i in range(BAR_SEGS):
-            x0 = tx + 34 + (172 - 34) * i / BAR_SEGS
-            x1 = tx + 34 + (172 - 34) * (i + 1) / BAR_SEGS
-            seg = c.create_line(x0, ty + 160, x1, ty + 160, fill=GREEN,
-                                width=6, capstyle="butt", state="hidden")
-            bar_segs.append(seg)
-        bar_tip = c.create_oval(tx + 31, ty + 157, tx + 37, ty + 163,
-                                fill=GREEN, outline="", state="hidden")
-
-        sdot = c.create_oval(cx - 42, ty + 185, cx - 36, ty + 191,
+        sdot = c.create_oval(cx - 42, ty + 180, cx - 36, ty + 186,
                              fill=DIM, outline="")
-        stxt = c.create_text(cx, ty + 188, text="正在检测", anchor="center",
+        stxt = c.create_text(cx, ty + 183, text="正在检测", anchor="center",
                              fill=MUTED, font=(FONT, 8))
 
         # 胶囊默认隐藏，只在充电/低电/未连接/未适配时出现
-        pill = round_rect(c, cx - 24, ty + 200, cx + 24, ty + 214, 8,
+        pill = round_rect(c, cx - 24, ty + 197, cx + 24, ty + 211, 8,
                           fill="#1B2536", outline="")
-        pill_txt = c.create_text(cx, ty + 207, text="", anchor="center",
+        pill_txt = c.create_text(cx, ty + 204, text="", anchor="center",
                                  fill=MUTED, font=(FONT, 8))
         c.itemconfigure(pill, state="hidden")
         c.itemconfigure(pill_txt, state="hidden")
 
-        items += [name_txt, pct_txt, pct_unit, track, *bar_segs, bar_tip,
+        items += [name_txt, pct_txt, pct_unit, track, arc, tip,
                   sdot, stxt, pill, pill_txt]
         for item in items:
             c.addtag_withtag(tag, item)
@@ -1485,12 +1499,12 @@ class App:
 
         self.rows[key] = {
             "bg": bg, "name_txt": name_txt, "tx": tx, "ty": ty, "cx": cx,
+            "ring_c": ring_c, "ring_r": ring_r,
             "pct_txt": pct_txt, "pct_unit": pct_unit,
-            "bar_segs": bar_segs, "bar_tip": bar_tip,
+            "arc": arc, "tip": tip,
             "pill": pill, "pill_txt": pill_txt,
             "sdot": sdot, "stxt": stxt, "tip_text": "",
         }
-
     def _build_footer(self):
         c = self.canvas
         self.updated_txt = c.create_text(22, 288, text="正在读取设备…",
@@ -1873,43 +1887,41 @@ class App:
         pct_text = "--" if state.battery is None else str(state.battery)
         c.itemconfigure(row["pct_txt"], text=pct_text, fill=pct_color)
 
-        # 大号百分比：数字 + % 作为整体居中
+        ring_c = row["ring_c"]; ring_r = row["ring_r"]
+
+        # 百分比：数字 + % 作为整体居中在圆环里
         if state.battery is None:
             c.itemconfigure(row["pct_unit"], state="hidden")
-            c.coords(row["pct_txt"], cx * s, (ty + 128) * s)
+            c.coords(row["pct_txt"], cx * s, ring_c * s)
         else:
             num_w = self.pct_font.measure(pct_text) / s
             unit_w = self.unit_font.measure("%") / s
-            gap = 4
+            gap = 3
             left = cx - (num_w + gap + unit_w) / 2
             c.itemconfigure(row["pct_unit"], text="%", state="normal",
                             fill=pct_color)
-            c.coords(row["pct_txt"], (left + num_w / 2) * s, (ty + 128) * s)
+            c.coords(row["pct_txt"], (left + num_w / 2) * s, ring_c * s)
             c.coords(row["pct_unit"], (left + num_w + gap) * s,
-                     (ty + 122) * s)
+                     (ring_c - 6) * s)
 
-        # 进度条：渐变填充 + 头部光点
-        segs = row["bar_segs"]
+        # 环形电量：填充弧 + 顶端光点
         if state.online and state.battery is not None:
             pct = max(0, min(100, state.battery))
-            bar_w = (172 - 34) * pct / 100.0
-            n = int(round(len(segs) * pct / 100.0))
-            for i, seg in enumerate(segs):
-                if i < n:
-                    t = (i / (len(segs) - 1)) if len(segs) > 1 else 1.0
-                    c.itemconfigure(seg, state="normal",
-                                    fill=_bar_gradient(bar_color, t))
-                else:
-                    c.itemconfigure(seg, state="hidden")
-            tip_x = tx + 34 + max(2.0, bar_w)
-            c.coords(row["bar_tip"], (tip_x - 4) * s, (ty + 156) * s,
-                     (tip_x + 4) * s, (ty + 164) * s)
-            c.itemconfigure(row["bar_tip"], state="normal",
-                            fill=_bar_gradient(bar_color, 1.0))
+            extent = -359.9 * pct / 100.0
+            c.itemconfigure(row["arc"], state="normal", outline=bar_color,
+                            extent=extent)
+            if pct > 0:
+                ang = math.radians(90.0 + extent)
+                dx = cx + ring_r * math.cos(ang)
+                dy = ring_c - ring_r * math.sin(ang)
+                c.coords(row["tip"], (dx - 4) * s, (dy - 4) * s,
+                         (dx + 4) * s, (dy + 4) * s)
+                c.itemconfigure(row["tip"], state="normal", fill=bar_color)
+            else:
+                c.itemconfigure(row["tip"], state="hidden")
         else:
-            for seg in segs:
-                c.itemconfigure(seg, state="hidden")
-            c.itemconfigure(row["bar_tip"], state="hidden")
+            c.itemconfigure(row["arc"], state="hidden")
+            c.itemconfigure(row["tip"], state="hidden")
 
         # 状态：正常只留圆点 + 文字；胶囊只给特殊状态
         status_text = state.status

@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "download_url": "https://ghfast.top/https://raw.githubusercontent.com/HHHHHH233333/2.4G-battery-viewer/main/2.4G%E7%94%B5%E9%87%8F.exe",
-  "notes": "全新界面：环形电量仪表 · 设备主题色 · 背景渐变"
+  "notes": "动态设备列表（按设备数量自动排布卡片）· 完善 README 与截图"
 }

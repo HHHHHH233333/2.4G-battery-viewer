@@ -53,7 +53,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -89,6 +89,12 @@ TRACK = "#1A2233"
 ACCENT = "#35C4E8"
 ACCENT_MOUSE = "#A78BFA"
 BAR_SEGS = 24
+
+# 设备槽位：每个槽位渲染一张卡片。新增设备时往这里加（并在 Monitor 补读取逻辑）。
+DEVICE_SLOTS = [
+    {"key": "kb", "kind": "keyboard"},
+    {"key": "mouse", "kind": "mouse"},
+]
 
 FONT = "Microsoft YaHei UI"
 FONT_NUM = "Segoe UI Variable Display"
@@ -980,11 +986,12 @@ class Monitor:
         self._wake.set()
 
     def snapshot(self):
+        """返回与 DEVICE_SLOTS 对齐的设备状态列表。"""
         with self._lock:
-            return (
+            return [
                 DeviceState(**self._kb.__dict__),
                 DeviceState(**self._mouse.__dict__),
-            )
+            ]
 
     def _publish(self, kb=None, mouse=None):
         with self._lock:
@@ -1273,7 +1280,13 @@ class App:
         self._tip_key = None
         self._hover_key = None
         self.tip = None
-        self.W = 470
+        # 动态设备列表：按槽位数量算窗口宽度，卡片从左到右排。
+        _n = len(DEVICE_SLOTS)
+        self.W = max(470, 44 + _n * 206 + (_n - 1) * 14)
+        if _n == 1:
+            self.card_x = [(self.W - 206) // 2]
+        else:
+            self.card_x = [22 + i * (206 + 14) for i in range(_n)]
         self.H = 312
         self.TILE_Y = 60
         self.TILE_H = 216
@@ -1343,8 +1356,8 @@ class App:
         self.canvas.pack(fill="both", expand=True)
 
         self._build_header()
-        self._build_row("kb", 22, "keyboard")
-        self._build_row("mouse", 242, "mouse")
+        for _i, _slot in enumerate(DEVICE_SLOTS):
+            self._build_row(_slot["key"], self.card_x[_i], _slot["kind"])
         self._build_footer()
         self._build_tooltip()
         # 所有静态坐标按 DPI 放大；字体已经由 Tk 按 DPI 放大，不需要再乘。
@@ -1381,9 +1394,9 @@ class App:
                                           fill=MUTED, font=(FONT, 8))
 
         # 刷新：图标 + 悬停底色
-        self.btn_refresh_bg = round_rect(c, 388, 18, 414, 44, 8,
+        self.btn_refresh_bg = round_rect(c, self.W - 82, 18, self.W - 56, 44, 8,
                                          fill=BG, outline="")
-        refresh = c.create_text(401, 31, text="\uE72C", anchor="center",
+        refresh = c.create_text(self.W - 69, 31, text="\uE72C", anchor="center",
                                 fill=MUTED, font=self.icon_font)
         for item in (self.btn_refresh_bg, refresh):
             c.addtag_withtag("btn_refresh", item)
@@ -1394,9 +1407,9 @@ class App:
         self.refresh_icon = refresh
 
         # 置顶：图钉
-        self.btn_pin_bg = round_rect(c, 420, 18, 446, 44, 8,
+        self.btn_pin_bg = round_rect(c, self.W - 50, 18, self.W - 24, 44, 8,
                                      fill=BG, outline="")
-        pin = c.create_text(433, 31, text="\uE718", anchor="center",
+        pin = c.create_text(self.W - 37, 31, text="\uE718", anchor="center",
                             fill=MUTED, font=self.icon_font)
         for item in (self.btn_pin_bg, pin):
             c.addtag_withtag("btn_pin", item)
@@ -1406,8 +1419,8 @@ class App:
         self.pin_icon = pin
 
         # 一块整体面板，两行设备放在里面
-        round_rect(c, 16, 75, 458, 259, 16, fill=SHADOW, outline="")
-        round_rect(c, 14, 72, 456, 256, 16,
+        round_rect(c, 16, 75, self.W - 12, 259, 16, fill=SHADOW, outline="")
+        round_rect(c, 14, 72, self.W - 14, 256, 16,
                    fill=PANEL, outline=PANEL_LINE, width=1)
 
     def _hover_refresh(self, on: bool):
@@ -1509,14 +1522,14 @@ class App:
         c = self.canvas
         self.updated_txt = c.create_text(22, 288, text="正在读取设备…",
                                          anchor="nw", fill=MUTED, font=(FONT, 8))
-        self.fb_btn = c.create_text(398, 288, text="提交设备信息", anchor="ne",
+        self.fb_btn = c.create_text(self.W - 72, 288, text="提交设备信息", anchor="ne",
                                     fill=BLUE, font=(FONT, 8))
         c.tag_bind(self.fb_btn, "<Button-1>", lambda e: self._open_feedback())
         c.tag_bind(self.fb_btn, "<Enter>",
                    lambda e: c.itemconfigure(self.fb_btn, fill=AMBER))
         c.tag_bind(self.fb_btn, "<Leave>",
                    lambda e: c.itemconfigure(self.fb_btn, fill=BLUE))
-        self.update_txt = c.create_text(448, 288, text="检查更新", anchor="ne",
+        self.update_txt = c.create_text(self.W - 22, 288, text="检查更新", anchor="ne",
                                         fill=DIM, font=(FONT, 8))
         c.tag_bind(self.update_txt, "<Button-1>", lambda e: self._check_update_click())
         c.tag_bind(self.update_txt, "<Enter>",
@@ -1980,18 +1993,18 @@ class App:
 
     def _tick(self):
         try:
-            kb, mouse = self.monitor.snapshot()
-            self._update_card("kb", kb)
-            self._update_card("mouse", mouse)
-            online = int(bool(kb.online)) + int(bool(mouse.online))
+            _states = self.monitor.snapshot()
+            for _slot, _st in zip(DEVICE_SLOTS, _states):
+                self._update_card(_slot["key"], _st)
+            online = sum(1 for _st in _states if _st.online)
             if online:
                 subtitle = f"{online} 台设备在线"
-            elif kb.updated or mouse.updated:
+            elif any(_st.updated for _st in _states):
                 subtitle = "设备未响应"
             else:
                 subtitle = "正在检测"
             self.canvas.itemconfigure(self.subtitle_txt, text=subtitle)
-            latest = max([t for t in (kb.updated, mouse.updated) if t] or [0])
+            latest = max([_st.updated for _st in _states if _st.updated] or [0])
             if latest:
                 self.canvas.itemconfigure(
                     self.updated_txt,

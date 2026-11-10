@@ -1,5 +1,5 @@
 {
-  "version": "1.6.1",
-  "download_url": "https://ghfast.top/https://raw.githubusercontent.com/HHHHHH233333/2.4G-battery-viewer/main/2.4G%E7%94%B5%E9%87%8F.exe",
-  "notes": "动态设备列表（按设备数量自动排布卡片）· 完善 README 与截图"
+  "version": "1.6.2",
+  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.2/2.4G-Battery-Viewer.exe",
+  "notes": "接入 GitHub Actions 自动打包发布：打 tag 即自动构建 EXE 并发布到 Release"
 }

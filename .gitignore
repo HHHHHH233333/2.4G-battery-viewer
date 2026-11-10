@@ -16,6 +16,10 @@ _MEI*/
 # 本机设备扫描结果（含本机 HID 信息，不入库）
 设备扫描.txt
 
+# 单文件版 EXE：由 GitHub Actions 打包发布，不提交到仓库
+2.4G电量.exe
+2.4G-Battery-Viewer.exe
+
 # 系统
 Thumbs.db
 Desktop.ini

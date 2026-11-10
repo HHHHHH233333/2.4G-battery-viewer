@@ -1,6 +1,6 @@
 # 2.4G 电量查看器
 
-双击 **`2.4G电量.exe`**（单文件版）就能打开。现在不再只认你的 VGN Neon75 和雷柏 VT9 Pro，会自动识别并轮询常见键鼠品牌。
+到 [Releases](https://github.com/HHHHHH233333/2.4G-battery-viewer/releases) 下载 **`2.4G-Battery-Viewer.exe`**（单文件版）双击就能打开。现在不再只认你的 VGN Neon75 和雷柏 VT9 Pro，会自动识别并轮询常见键鼠品牌。
 
 ![界面预览](screenshot.png)
 
@@ -79,7 +79,7 @@ Corsair、A4Tech / Bloody 等品牌大多使用私有 HID 协议，
 ## 使用
 
 1. 把键盘、鼠标的接收器插在电脑上，打开鼠标电源。
-2. 双击 `2.4G电量.exe`。
+2. 双击下载的 `2.4G-Battery-Viewer.exe`。
 3. 每 15 秒自动刷新一次；点右上角刷新图标或按 **F5** 立即读取，**Esc** 关闭窗口。
 4. 点右上角图钉图标可以让窗口一直显示在最前面。
 5. 窗口右下角点 **提交设备信息**，把设备信息上报给我（常驻按钮，随时可提交）。
@@ -94,11 +94,10 @@ Corsair、A4Tech / Bloody 等品牌大多使用私有 HID 协议，
 窗口右下角的 **检查更新** 按钮：
 
 1. 读取仓库里的 `version.json`，对比版本号（走 api.github.com，国内可直连）
-2. 有新版本时弹窗确认，下载新 exe（`download_url`，可换成任意国内镜像地址）
+2. 有新版本时弹窗确认，从 `download_url` 下载新 exe（默认走 ghfast.top 国内镜像，指向最新 Release 资产）
 3. 下载完成后自动替换当前 exe 并重启，中间不弹后台窗口
 
-不点按钮就不联网。发布新版本只需：改 `battery_viewer.py` 里的 `APP_VERSION`，
-更新仓库里的 `version.json`（改 `version` 和 `download_url`），再上传新 exe 即可。
+不点按钮就不联网。新版本由 GitHub Actions 自动打包发布（见下方「自动打包」）。
 
 ## 界面
 
@@ -164,19 +163,31 @@ python battery_viewer.py --diag
 python battery_viewer.py --scan
 ```
 
-## 重新打包
+## 自动打包（GitHub Actions）
 
-推荐打包成单文件，并把临时解压目录固定在 exe 所在目录：
+仓库已接入 GitHub Actions：推一个 `v*` tag 就会在 GitHub 的 Windows 构建机上自动跑 PyInstaller 打包，并把生成的 EXE 发布到对应的 Release，无需本地手动打包。
+
+发一版新版本只需三步：
+
+1. 改 `battery_viewer.py` 里的 `APP_VERSION`，并更新 `version.json`（`version` 和 `download_url`，download_url 里的 tag 名要和这次发版一致）。
+2. 提交并 push 到 main。
+3. 打 tag 并 push：`git tag v1.6.3 && git push origin v1.6.3`。
+
+之后到仓库的 Actions 页看构建结果即可，Release 会自动生成（含 `2.4G-Battery-Viewer.exe`）。
+
+## 本地重新打包（可选）
+
+正常情况下用上面的自动打包即可。想在本机手动打包（比如调试），命令如下：
 
 ```bat
 python -m pip install pyinstaller pillow
 python make_icon.py
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
-  --name "2.4G电量" --icon app.ico --manifest app.manifest ^
+  --name "2.4G-Battery-Viewer" --icon app.ico --manifest app.manifest ^
   --runtime-tmpdir . battery_viewer.py
 ```
 
-生成 `dist\2.4G电量.exe`，复制到本目录即可使用。
+生成 `dist\2.4G-Battery-Viewer.exe`。
 
 > 这个 EXE 没有代码签名，首次运行 Windows SmartScreen 可能提示“未知发布者”。
 > 点“更多信息 → 仍要运行”即可。源码就在同目录，也可以按上面的命令自行打包。
@@ -200,12 +211,14 @@ signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 ^
 
 ## 文件
 
-- `2.4G电量.exe`：单文件版，直接双击（放在可写目录）
 - `battery_viewer.py`：界面、扫描与各品牌适配器
 - `hid_win.py`：纯 ctypes 的 Windows HID 封装
+- `.github/workflows/build.yml`：GitHub Actions 自动打包发布
 - `app.manifest`：DPI 感知声明
 - `app.ico` / `make_icon.py`：图标
 - `screenshot.png`：README 里的界面截图
 - `feedback-aliyun.js`：设备反馈接收端（阿里云函数计算 FC，国内直连，当前默认）
 - `feedback-worker.js`：设备反馈接收端（Cloudflare Worker，可选）
-- `version.json`：在线更新的版本号与下载地址
+- `version.json`：在线更新的版本号与下载地址（指向最新 Release 资产）
+
+> 单文件版 EXE 不再放进仓库根目录，统一从 [Releases](https://github.com/HHHHHH233333/2.4G-battery-viewer/releases) 下载（`2.4G-Battery-Viewer.exe`）。

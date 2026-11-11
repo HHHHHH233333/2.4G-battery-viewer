@@ -165,11 +165,11 @@ python battery_viewer.py --scan
 
 ## 自动打包（GitHub Actions）
 
-仓库已接入 GitHub Actions：推一个 `v*` tag 就会在 GitHub 的 Windows 构建机上自动跑 PyInstaller 打包，并把生成的 EXE 发布到对应的 Release，无需本地手动打包。
+仓库已接入 GitHub Actions：推一个 `v*` tag 就会在 GitHub 的 Windows 构建机上自动跑 PyInstaller 打包，并把生成的 EXE 发布到对应的 Release，无需本地手动打包。Release 的更新说明会自动从 `version.json` 的 `notes` 字段生成。
 
 发一版新版本只需三步：
 
-1. 改 `battery_viewer.py` 里的 `APP_VERSION`，并更新 `version.json`（`version` 和 `download_url`，download_url 里的 tag 名要和这次发版一致）。
+1. 改 `battery_viewer.py` 里的 `APP_VERSION`，并更新 `version.json`（`version`、`download_url`、`notes`；`download_url` 里的 tag 名要和这次发版一致，`notes` 会同时作为 Release 更新说明和 app 内「检查更新」的更新内容）。
 2. 提交并 push 到 main。
 3. 打 tag 并 push：`git tag v1.6.3 && git push origin v1.6.3`。
 

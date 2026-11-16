@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -53,7 +55,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -1800,6 +1802,7 @@ class App:
             messagebox.showinfo("检查更新", f"已是最新版本 v{APP_VERSION}")
             return
         dl = (info or {}).get("download_url") or ""
+        ck = (info or {}).get("checksum_url") or ""
         notes = str((info or {}).get("notes") or "").strip()
         msg = f"发现新版本 v{latest}（当前 v{APP_VERSION}）"
         if notes:
@@ -1807,9 +1810,9 @@ class App:
         msg += "\n\n是否下载并更新？"
         if not messagebox.askyesno("发现新版本", msg):
             return
-        self._download_update(latest, dl)
+        self._download_update(latest, dl, ck)
 
-    def _download_update(self, latest, url):
+    def _download_update(self, latest, url, checksum_url=""):
         if not url:
             messagebox.showerror("更新", "没有可用的下载地址。")
             return
@@ -1844,6 +1847,23 @@ class App:
         def run():
             try:
                 download_file(url, new_path, progress)
+                if checksum_url:
+                    expected = ""
+                    ck_path = new_path + ".sha256"
+                    try:
+                        download_file(checksum_url, ck_path)
+                        with open(ck_path, "r", encoding="utf-8", errors="replace") as f:
+                            expected = _parse_sha256(f.read())
+                    finally:
+                        try:
+                            if os.path.exists(ck_path):
+                                os.remove(ck_path)
+                        except Exception:
+                            pass
+                    if not expected:
+                        raise RuntimeError("无法获取校验信息，已取消更新")
+                    if _sha256_file(new_path) != expected:
+                        raise RuntimeError("下载文件校验失败（SHA256 不一致），已取消更新")
                 self.root.after(0, lambda: self._finish_update(win, exe, new_path, latest))
             except Exception as e:
                 self.root.after(0, lambda: self._update_download_fail(win, str(e)))
@@ -2224,8 +2244,20 @@ def check_update() -> dict:
     return json.loads(raw)
 
 
-def download_file(url: str, dest: str, progress_cb=None) -> int:
-    """下载到 dest，返回字节数；progress_cb(done, total) 周期回调。"""
+_MIRROR_PREFIXES = ("https://ghfast.top/", "https://gh-proxy.com/", "https://ghproxy.com/")
+
+
+def _fallback_url(url: str) -> str | None:
+    """去掉国内镜像前缀，得到直连 GitHub 的备用地址；无镜像前缀时返回 None。"""
+    for prefix in _MIRROR_PREFIXES:
+        if url.startswith(prefix):
+            direct = url[len(prefix):]
+            return direct if direct and direct != url else None
+    return None
+
+
+def _download_one(url: str, dest: str, progress_cb=None) -> int:
+    """单地址下载到 dest，返回字节数；失败抛异常。"""
     req = urllib.request.Request(url, headers={"User-Agent": UPDATE_UA})
     with urllib.request.urlopen(req, timeout=UPDATE_DOWNLOAD_TIMEOUT) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
@@ -2242,6 +2274,43 @@ def download_file(url: str, dest: str, progress_cb=None) -> int:
     return done
 
 
+def download_file(url: str, dest: str, progress_cb=None) -> int:
+    """下载到 dest，返回字节数；镜像地址失败时自动回退直连 GitHub。"""
+    urls = [url]
+    fb = _fallback_url(url)
+    if fb and fb not in urls:
+        urls.append(fb)
+    last = None
+    for u in urls:
+        try:
+            return _download_one(u, dest, progress_cb)
+        except Exception as e:
+            last = e
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except Exception:
+                pass
+    raise last
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _parse_sha256(text: str) -> str:
+    """从校验和文本里提取 64 位十六进制 SHA256。"""
+    m = re.search(r"\b[0-9a-fA-F]{64}\b", text or "")
+    return m.group(0).lower() if m else ""
+
+
 def _exe_path() -> str | None:
     """冻结成 exe 时返回 exe 自身路径，否则返回 None（源码运行不替换自己）。"""
     if getattr(sys, "frozen", False):
@@ -2250,28 +2319,46 @@ def _exe_path() -> str | None:
 
 
 def _apply_update(exe_path: str, new_path: str) -> None:
-    """写一个批处理：等程序退出后替换 exe、重启、自我删除。"""
-    script = (
-        "@echo off\r\n"
-        "chcp 65001 >nul\r\n"
-        ":wait\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
-        'del /f /q "%~1" >nul 2>&1\r\n'
-        'if exist "%~1" goto wait\r\n'
-        'move /y "%~2" "%~1" >nul\r\n'
-        'start "" "%~1"\r\n'
-        'del "%~f0" >nul 2>&1\r\n'
-    )
+    """写一个批处理：等程序退出后备份旧 exe、替换、重启；新版本起不来时自动还原旧版。"""
+    lines = [
+        "@echo off",
+        "chcp 65001 >nul",
+        "setlocal",
+        'set "APP=%~1"',
+        'set "NEW=%~2"',
+        'set "BAK=%~1.bak"',
+        'set "NAME=%~nx1"',
+        ":wait",
+        "timeout /t 1 /nobreak >nul",
+        'move /y "%APP%" "%BAK%" >nul 2>&1',
+        'if exist "%APP%" goto wait',
+        'move /y "%NEW%" "%APP%" >nul 2>&1',
+        'if not exist "%APP%" (',
+        '    move /y "%BAK%" "%APP%" >nul 2>&1',
+        '    start "" "%APP%"',
+        '    del "%~f0" >nul 2>&1',
+        '    exit /b 0',
+        ')',
+        'start "" "%APP%"',
+        "timeout /t 6 /nobreak >nul",
+        'tasklist /fi "IMAGENAME eq %NAME%" 2>nul | find /i "%NAME%" >nul',
+        "if errorlevel 1 (",
+        '    move /y "%BAK%" "%APP%" >nul 2>&1',
+        '    start "" "%APP%"',
+        ") else (",
+        '    del /f /q "%BAK%" >nul 2>&1',
+        ")",
+        'del "%~f0" >nul 2>&1',
+    ]
+    script = "\r\n".join(lines) + "\r\n"
     bat = os.path.join(os.path.dirname(exe_path), "_update.bat")
-    with open(bat, "w", encoding="utf-8") as f:
+    with open(bat, "w", encoding="utf-8", newline="") as f:
         f.write(script)
     subprocess.Popen(
         ["cmd", "/c", bat, exe_path, new_path],
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         close_fds=True,
     )
-
-
 def scan_hid() -> str:
     """兼容旧的 --scan：把报告写成两个文件并打印。"""
     text, raw = build_device_report()

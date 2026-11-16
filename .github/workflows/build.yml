@@ -20,11 +20,45 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, re, sys
+          src = open('battery_viewer.py', encoding='utf-8').read()
+          m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', src)
+          if not m:
+              sys.exit('APP_VERSION not found')
+          app = m.group(1)
+          d = json.load(open('version.json', encoding='utf-8'))
+          jv = d.get('version')
+          tag = os.environ.get('GITHUB_REF_NAME', '')
+          tv = tag[1:] if tag.startswith('v') else tag
+          dl = d.get('download_url') or ''
+          print(f'APP_VERSION={app}  version.json={jv}  tag={tv}')
+          if app != jv or jv != tv:
+              sys.exit(f'VERSION MISMATCH: APP_VERSION={app} version.json={jv} tag={tv}')
+          if f'/download/v{tv}/' not in dl:
+              sys.exit(f'download_url tag mismatch: {dl}')
+          print('version consistency OK')
+          PY
+
       - name: Install PyInstaller
         run: python -m pip install --upgrade pip pyinstaller==6.22.3
 
       - name: Build onefile EXE
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name "2.4G-Battery-Viewer" --icon app.ico --manifest app.manifest --runtime-tmpdir . battery_viewer.py
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib
+          p = pathlib.Path('dist/2.4G-Battery-Viewer.exe')
+          h = hashlib.sha256(p.read_bytes()).hexdigest()
+          open('dist/SHA256SUMS.txt', 'w', encoding='ascii').write(h + '  2.4G-Battery-Viewer.exe\n')
+          print('sha256:', h)
+          PY
 
       - name: Generate release body from version.json
         shell: bash
@@ -40,7 +74,9 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/2.4G-Battery-Viewer.exe
+          files: |
+            dist/2.4G-Battery-Viewer.exe
+            dist/SHA256SUMS.txt
           body_path: release-body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

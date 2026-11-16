@@ -94,7 +94,7 @@ Corsair、A4Tech / Bloody 等品牌大多使用私有 HID 协议，
 窗口右下角的 **检查更新** 按钮：
 
 1. 读取仓库里的 `version.json`，对比版本号（走 api.github.com，国内可直连）
-2. 有新版本时弹窗确认，从 `download_url` 下载新 exe（默认走 ghfast.top 国内镜像，指向最新 Release 资产）
+2. 有新版本时弹窗确认，从 `download_url` 下载新 exe（默认走 ghfast.top 国内镜像，失败自动回退直连 GitHub；下载后按 `checksum_url` 校验 SHA256，替换前备份旧版，新版本起不来自动还原旧版）
 3. 下载完成后自动替换当前 exe 并重启，中间不弹后台窗口
 
 不点按钮就不联网。新版本由 GitHub Actions 自动打包发布（见下方「自动打包」）。
@@ -165,15 +165,15 @@ python battery_viewer.py --scan
 
 ## 自动打包（GitHub Actions）
 
-仓库已接入 GitHub Actions：推一个 `v*` tag 就会在 GitHub 的 Windows 构建机上自动跑 PyInstaller 打包，并把生成的 EXE 发布到对应的 Release，无需本地手动打包。Release 的更新说明会自动从 `version.json` 的 `notes` 字段生成。
+仓库已接入 GitHub Actions：推一个 `v*` tag 就会在 GitHub 的 Windows 构建机上自动跑 PyInstaller 打包，并把生成的 EXE 发布到对应的 Release，无需本地手动打包。构建前会校验「APP_VERSION / version.json / tag」三者一致，并自动生成 `SHA256SUMS.txt` 校验文件；Release 的更新说明会自动从 `version.json` 的 `notes` 字段生成。
 
 发一版新版本只需三步：
 
-1. 改 `battery_viewer.py` 里的 `APP_VERSION`，并更新 `version.json`（`version`、`download_url`、`notes`；`download_url` 里的 tag 名要和这次发版一致，`notes` 会同时作为 Release 更新说明和 app 内「检查更新」的更新内容）。
+1. 改 `battery_viewer.py` 里的 `APP_VERSION`，并更新 `version.json`（`version`、`download_url`、`checksum_url`、`notes`；两个 URL 里的 tag 名要和这次发版一致，`notes` 会同时作为 Release 更新说明和 app 内「检查更新」的更新内容）。
 2. 提交并 push 到 main。
 3. 打 tag 并 push：`git tag v1.6.3 && git push origin v1.6.3`。
 
-之后到仓库的 Actions 页看构建结果即可，Release 会自动生成（含 `2.4G-Battery-Viewer.exe`）。
+之后到仓库的 Actions 页看构建结果即可，Release 会自动生成（含 `2.4G-Battery-Viewer.exe` 和 `SHA256SUMS.txt`）。
 
 ## 本地重新打包（可选）
 

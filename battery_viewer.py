@@ -55,7 +55,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.6.4"
+APP_VERSION = "1.6.5"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -237,6 +237,12 @@ def _mix_hex(a: str, b: str, t: float) -> str:
     g = int(ag + (bg - ag) * t)
     bl = int(ab + (bb - ab) * t)
     return f"#{r:02x}{g:02x}{bl:02x}"
+
+
+def _bolt_poly(cx: float, cy: float) -> tuple:
+    """以 (cx,cy) 为中心的小闪电多边形（尖朝下），用于充电徽章。"""
+    return (cx, cy - 7, cx - 3, cy + 1, cx - 1, cy + 1, cx - 2, cy + 7,
+            cx + 3, cy - 1, cx + 1, cy - 1)
 
 
 def _bar_gradient(base: str, t: float) -> str:
@@ -1372,6 +1378,7 @@ class App:
         self.root.after(60, lambda: apply_window_style(self.root))
         self.monitor.start()
         self.root.after(200, self._tick)
+        self.root.after(0, self._pulse)
 
     # ---------- 绘制 ----------
     def _build_header(self):
@@ -1475,8 +1482,20 @@ class App:
                                         fill=accent, capstyle="round"))
             name = "自动识别鼠标"
 
-        # 环形电量：轨道 + 填充弧 + 顶端光点
+        # 充电徽章：小圆 + 白色闪电（充电时显示）
+        badge = c.create_oval(cx + 11, ty + 44, cx + 28, ty + 61,
+                              fill=BLUE, outline="")
+        bolt = c.create_polygon(*_bolt_poly(cx + 19.5, ty + 52.5),
+                                fill="#FFFFFF", outline="")
+        c.itemconfigure(badge, state="hidden")
+        c.itemconfigure(bolt, state="hidden")
+
+        # 环形电量：呼吸光晕 + 轨道 + 填充弧 + 顶端光点
         bb = (cx - ring_r, ring_c - ring_r, cx + ring_r, ring_c + ring_r)
+        gb = (cx - ring_r - 4, ring_c - ring_r - 4, cx + ring_r + 4,
+              ring_c + ring_r + 4)
+        glow = c.create_arc(*gb, start=0, extent=359.9, style="arc",
+                            width=10, outline=PANEL, state="hidden")
         track = c.create_arc(*bb, start=0, extent=359.9, style="arc",
                              width=7, outline=TRACK)
         arc = c.create_arc(*bb, start=90, extent=0, style="arc",
@@ -1505,8 +1524,8 @@ class App:
         c.itemconfigure(pill, state="hidden")
         c.itemconfigure(pill_txt, state="hidden")
 
-        items += [name_txt, pct_txt, pct_unit, track, arc, tip,
-                  sdot, stxt, pill, pill_txt]
+        items += [name_txt, pct_txt, pct_unit, glow, track, arc, tip,
+                  badge, bolt, sdot, stxt, pill, pill_txt]
         for item in items:
             c.addtag_withtag(tag, item)
         c.tag_bind(tag, "<Enter>", lambda e, k=key: self._row_enter(k))
@@ -1516,9 +1535,12 @@ class App:
             "bg": bg, "name_txt": name_txt, "tx": tx, "ty": ty, "cx": cx,
             "ring_c": ring_c, "ring_r": ring_r,
             "pct_txt": pct_txt, "pct_unit": pct_unit,
-            "arc": arc, "tip": tip,
+            "arc": arc, "tip": tip, "glow": glow,
+            "badge": badge, "bolt": bolt,
             "pill": pill, "pill_txt": pill_txt,
             "sdot": sdot, "stxt": stxt, "tip_text": "",
+            "shown_pct": None, "anim_job": None,
+            "arc_color": DIM, "low": False,
         }
     def _build_footer(self):
         c = self.canvas
@@ -1907,11 +1929,12 @@ class App:
         if state.name:
             c.itemconfigure(row["name_txt"], text=_elide(state.name, 14))
 
-        bar_color = BLUE if state.charging else (
+        is_charging = state.charging or "USB" in state.status
+        bar_color = BLUE if is_charging else (
             level_color(state.battery) if state.online else DIM)
         if not state.online:
             pct_color = DIM
-        elif state.charging:
+        elif is_charging:
             pct_color = BLUE
         elif state.battery is not None and state.battery <= 20:
             pct_color = RED
@@ -1937,24 +1960,25 @@ class App:
             c.coords(row["pct_unit"], (left + num_w + gap) * s,
                      (ring_c - 6) * s)
 
-        # 环形电量：填充弧 + 顶端光点
+        # 环形电量：填充弧 + 顶端光点（平滑动画）
+        row["arc_color"] = bar_color
         if state.online and state.battery is not None:
             pct = max(0, min(100, state.battery))
-            extent = -359.9 * pct / 100.0
-            c.itemconfigure(row["arc"], state="normal", outline=bar_color,
-                            extent=extent)
-            if pct > 0:
-                ang = math.radians(90.0 + extent)
-                dx = cx + ring_r * math.cos(ang)
-                dy = ring_c - ring_r * math.sin(ang)
-                c.coords(row["tip"], (dx - 4) * s, (dy - 4) * s,
-                         (dx + 4) * s, (dy + 4) * s)
-                c.itemconfigure(row["tip"], state="normal", fill=bar_color)
-            else:
-                c.itemconfigure(row["tip"], state="hidden")
+            self._animate_arc_to(key, pct)
         else:
+            row["shown_pct"] = None
             c.itemconfigure(row["arc"], state="hidden")
             c.itemconfigure(row["tip"], state="hidden")
+
+        # 充电徽章 / 低电呼吸光晕
+        low = (state.online and not is_charging
+               and state.battery is not None and state.battery <= 20)
+        row["low"] = low
+        c.itemconfigure(row["badge"],
+                        state="normal" if is_charging else "hidden")
+        c.itemconfigure(row["bolt"],
+                        state="normal" if is_charging else "hidden")
+        c.itemconfigure(row["glow"], state="normal" if low else "hidden")
 
         # 状态：正常只留圆点 + 文字；胶囊只给特殊状态
         status_text = state.status
@@ -1964,7 +1988,7 @@ class App:
         pill_fg = MUTED
         dot_color = DIM
         if state.online:
-            if state.charging:
+            if is_charging:
                 show_pill = True
                 pill_text, pill_fill, pill_fg = "充电中", "#122A42", BLUE
                 dot_color = BLUE
@@ -1988,7 +2012,7 @@ class App:
 
         c.itemconfigure(row["sdot"], fill=dot_color)
         c.itemconfigure(row["stxt"], text=_elide(status_text, 20),
-                        fill=BLUE if state.charging else MUTED)
+                        fill=BLUE if is_charging else MUTED)
         if show_pill:
             c.itemconfigure(row["pill"], state="normal", fill=pill_fill)
             c.itemconfigure(row["pill_txt"], state="normal",
@@ -2010,6 +2034,68 @@ class App:
         if (self._tip_key == key and self.tip is not None
                 and self.tip.winfo_ismapped()):
             self.tip_label.configure(text=row["tip_text"])
+
+    def _render_arc(self, key, pct: float):
+        row = self.rows[key]
+        c = self.canvas
+        s = self.S
+        cx, ring_c, ring_r = row["cx"], row["ring_c"], row["ring_r"]
+        color = row["arc_color"]
+        extent = -359.9 * pct / 100.0
+        c.itemconfigure(row["arc"], state="normal", outline=color,
+                        extent=extent)
+        if pct > 0:
+            ang = math.radians(90.0 + extent)
+            dx = cx + ring_r * math.cos(ang)
+            dy = ring_c - ring_r * math.sin(ang)
+            c.coords(row["tip"], (dx - 4) * s, (dy - 4) * s,
+                     (dx + 4) * s, (dy + 4) * s)
+            c.itemconfigure(row["tip"], state="normal", fill=color)
+        else:
+            c.itemconfigure(row["tip"], state="hidden")
+
+    def _animate_arc_to(self, key, target: float):
+        row = self.rows[key]
+        cur = row["shown_pct"]
+        if cur is None or abs(cur - target) < 0.5:
+            row["shown_pct"] = float(target)
+            self._render_arc(key, target)
+            return
+        if row["anim_job"] is not None:
+            self.root.after_cancel(row["anim_job"])
+            row["anim_job"] = None
+        row["anim_from"] = cur
+        row["anim_to"] = float(target)
+        row["anim_t0"] = time.monotonic()
+        row["anim_job"] = self.root.after(16, lambda: self._anim_step(key))
+
+    def _anim_step(self, key):
+        row = self.rows[key]
+        row["anim_job"] = None
+        frm = row.get("anim_from")
+        to = row.get("anim_to")
+        t0 = row.get("anim_t0")
+        if frm is None or to is None or t0 is None:
+            return
+        t = (time.monotonic() - t0) / 0.30
+        if t >= 1.0:
+            row["shown_pct"] = to
+            self._render_arc(key, to)
+            return
+        e = 1.0 - (1.0 - t) ** 3  # ease-out 缓动
+        row["shown_pct"] = frm + (to - frm) * e
+        self._render_arc(key, row["shown_pct"])
+        row["anim_job"] = self.root.after(16, lambda: self._anim_step(key))
+
+    def _pulse(self):
+        t = time.monotonic()
+        for row in self.rows.values():
+            if row.get("low"):
+                k = 0.5 + 0.5 * math.sin(t * (2.0 * math.pi / 1.2))
+                self.canvas.itemconfigure(row["glow"],
+                                          outline=_mix_hex(PANEL, RED,
+                                                           0.12 + 0.30 * k))
+        self.root.after(40, self._pulse)
 
     def _tick(self):
         try:

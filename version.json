@@ -1,6 +1,6 @@
 {
-  "version": "1.6.4",
-  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.4/2.4G-Battery-Viewer.exe",
-  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.4/SHA256SUMS.txt",
-  "notes": "更新更安全：下载后校验 SHA256、镜像失败自动回退直连、新版本起不来自动还原旧版；发版自动校验版本号一致"
+  "version": "1.6.5",
+  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.5/2.4G-Battery-Viewer.exe",
+  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.5/SHA256SUMS.txt",
+  "notes": "界面更灵动：电量环形平滑动画、低电量呼吸提示；充电时在设备图标上叠加 ⚡ 徽章，并支持把有线 USB 连接识别为充电中"
 }

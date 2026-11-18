@@ -55,7 +55,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.6.5"
+APP_VERSION = "1.6.6"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -1282,6 +1282,7 @@ class App:
         self.root = root
         self.monitor = Monitor()
         self.rows = {}
+        self._bat_hist = {}
         self.pin = False
         self._last_tick = 0.0
         self._tip_job = None
@@ -1920,6 +1921,20 @@ class App:
         c.itemconfigure(self.pin_icon, fill=BLUE if self.pin else MUTED)
 
     # ---------- 刷新 ----------
+    def _trend_charging(self, key, state):
+        """用电量上升趋势推测充电（给没有充电标志的 2.4G 设备，如 VT9 Pro）。"""
+        if state.battery is None or state.updated is None:
+            return False
+        hist = self._bat_hist.setdefault(key, [])
+        if not hist or hist[-1][1] != state.battery:
+            hist.append((state.updated, state.battery))
+            cutoff = state.updated - 180
+            while hist and hist[0][0] < cutoff:
+                hist.pop(0)
+        if len(hist) < 3 or hist[-1][0] - hist[0][0] < 90:
+            return False
+        return hist[-1][1] - hist[0][1] >= 2
+
     def _update_card(self, key, state: DeviceState):
         c = self.canvas
         row = self.rows[key]
@@ -1929,7 +1944,8 @@ class App:
         if state.name:
             c.itemconfigure(row["name_txt"], text=_elide(state.name, 14))
 
-        is_charging = state.charging or "USB" in state.status
+        is_charging = (state.charging or "USB" in state.status
+                       or self._trend_charging(key, state))
         bar_color = BLUE if is_charging else (
             level_color(state.battery) if state.online else DIM)
         if not state.online:

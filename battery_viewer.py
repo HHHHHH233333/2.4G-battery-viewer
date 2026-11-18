@@ -55,7 +55,7 @@ from hid_win import (
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.6.6"
+APP_VERSION = "1.6.7"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -68,7 +68,7 @@ FEEDBACK_UA = "2.4G-battery-viewer/" + APP_VERSION
 # 更新检测：只在用户主动点“检查更新”时才联网。
 # version.json 放在仓库里，version 是最新版本号，download_url 是新 exe 下载地址。
 UPDATE_REPO = "HHHHHH233333/2.4G-battery-viewer"
-UPDATE_TIMEOUT = 15
+UPDATE_TIMEOUT = 6
 UPDATE_DOWNLOAD_TIMEOUT = 600
 UPDATE_UA = "2.4G-battery-viewer/" + APP_VERSION
 
@@ -1801,15 +1801,42 @@ class App:
             return
         self._checking = True
         self.canvas.itemconfigure(self.update_txt, text="检查中…")
+        box = []  # 子线程结果回传箱（list.append 线程安全）
 
         def run():
+            result = {}
             try:
-                info = check_update()
+                result["info"] = check_update()
             except Exception as e:
-                self.root.after(0, lambda: self._update_prompt(None, str(e)))
-                return
-            self.root.after(0, lambda: self._update_prompt(info, None))
+                result["err"] = _friendly_update_error(e)
+            box.append(result)
+
         threading.Thread(target=run, daemon=True).start()
+        # 主线程每 100ms 轮询结果；30 秒超时兜底（全程不在子线程碰 tk）
+        self.root.after(0, lambda: self._poll_check(box, 0))
+
+    def _poll_check(self, box, elapsed):
+        if box:
+            self._finish_check(box[0])
+            return
+        if elapsed >= 30000:
+            self._timeout_check()
+            return
+        self.root.after(100, lambda: self._poll_check(box, elapsed + 100))
+
+    def _finish_check(self, result):
+        if not getattr(self, "_checking", False):
+            return
+        self._checking = False
+        self.canvas.itemconfigure(self.update_txt, text="检查更新")
+        self._update_prompt(result.get("info"), result.get("err"))
+
+    def _timeout_check(self):
+        if getattr(self, "_checking", False):
+            self._checking = False
+            self.canvas.itemconfigure(self.update_txt, text="检查更新")
+            messagebox.showwarning("检查更新", "检查更新超时，请检查网络后重试。")
+
 
     def _update_prompt(self, info, err):
         self._checking = False
@@ -2332,18 +2359,56 @@ def _version_tuple(v: str) -> tuple[int, ...]:
     return tuple(parts[:3])
 
 
-def check_update() -> dict:
-    """读取仓库里的 version.json，返回 {'version','download_url','notes'}；失败抛异常。"""
-    url = f"https://api.github.com/repos/{UPDATE_REPO}/contents/version.json"
+_UPDATE_SOURCES = (
+    # 依次尝试：GitHub API → ghfast 镜像 → gh-proxy 镜像 → raw 直连
+    "https://api.github.com/repos/{repo}/contents/version.json",
+    "https://ghfast.top/https://github.com/{repo}/raw/main/version.json",
+    "https://gh-proxy.com/https://github.com/{repo}/raw/main/version.json",
+    "https://raw.githubusercontent.com/{repo}/main/version.json",
+)
+
+
+def _friendly_update_error(e: Exception) -> str:
+    s = str(e).lower()
+    if "timed out" in s or "timeout" in s:
+        return "网络超时，请稍后重试"
+    if "getaddrinfo" in s or "name or service" in s:
+        return "无法解析服务器，请检查网络连接"
+    if "connection" in s or "reset" in s or "refused" in s or "eof" in s:
+        return "无法连接更新服务器，请检查网络"
+    return str(e)
+
+
+def _fetch_version_json(url: str) -> str:
+    """下载一个版本源，返回 version.json 纯文本；失败抛异常。"""
     req = urllib.request.Request(
-        url, headers={"User-Agent": UPDATE_UA,
-                      "Accept": "application/vnd.github+json",
-                      "Cache-Control": "no-cache"},
-    )
+        url, headers={"User-Agent": UPDATE_UA, "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=UPDATE_TIMEOUT) as resp:
-        meta = json.loads(resp.read().decode("utf-8", "replace"))
-    raw = base64.b64decode(meta.get("content", "")).decode("utf-8", "replace")
-    return json.loads(raw)
+        text = resp.read().decode("utf-8", "replace")
+    obj = json.loads(text)
+    if isinstance(obj, dict) and "content" in obj:
+        # GitHub contents API 返回 base64 包裹
+        return base64.b64decode(str(obj.get("content", ""))).decode("utf-8", "replace")
+    return text
+
+
+def check_update() -> dict:
+    """读取仓库里的 version.json，返回 {'version','download_url','notes'}；失败抛异常。
+
+    依次尝试多个镜像源，只要有一个能拿到有效版本信息就返回，弱网下更稳。
+    """
+    last = None
+    for tmpl in _UPDATE_SOURCES:
+        url = tmpl.format(repo=UPDATE_REPO)
+        try:
+            raw = _fetch_version_json(url)
+            info = json.loads(raw)
+            if info.get("version"):
+                return info
+            last = RuntimeError("版本信息为空")
+        except Exception as e:
+            last = e
+    raise last or RuntimeError("无法获取版本信息")
 
 
 _MIRROR_PREFIXES = ("https://ghfast.top/", "https://gh-proxy.com/", "https://ghproxy.com/")

@@ -1,6 +1,6 @@
 {
-  "version": "1.6.6",
-  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.6/2.4G-Battery-Viewer.exe",
-  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.6/SHA256SUMS.txt",
-  "notes": "VT9 Pro 等无充电标志的 2.4G 设备改用“电量趋势”识别充电：插线充电时电量上升，约 1–2 分钟后自动显示 ⚡ 充电中"
+  "version": "1.6.7",
+  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.7/2.4G-Battery-Viewer.exe",
+  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.6.7/SHA256SUMS.txt",
+  "notes": "检查更新更稳定：多镜像源自动回退（GitHub API / ghfast / gh-proxy），30 秒超时兜底，网络差也不再卡死"
 }

@@ -159,6 +159,11 @@ def _setup_ctypes():
     _user32.DestroyIcon.argtypes = [wintypes.HICON]
     _kernel32.GetModuleHandleW.restype = wintypes.HMODULE
     _kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    _shell32.ExtractIconExW.restype = wintypes.UINT
+    _shell32.ExtractIconExW.argtypes = [wintypes.LPCWSTR, ctypes.c_int,
+                                        ctypes.POINTER(wintypes.HICON),
+                                        ctypes.POINTER(wintypes.HICON),
+                                        wintypes.UINT]
     _shell32.Shell_NotifyIconW.restype = wintypes.BOOL
     _shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD,
                                            ctypes.POINTER(_NOTIFYICONDATAW)]
@@ -181,7 +186,7 @@ def _wnd_proc(hwnd, msg, wparam, lparam):
 
 
 def _load_icon(icon_path: str | None) -> tuple[int, bool]:
-    """返回 (hIcon, 是否需要销毁)。优先 exe 自身图标，其次 app.ico，最后系统默认。"""
+    """返回 (hIcon, 是否需要销毁)。优先从 exe/app.ico 提取，最后回退系统默认图标。"""
     path = icon_path
     if not path:
         if getattr(sys, "frozen", False):
@@ -192,7 +197,20 @@ def _load_icon(icon_path: str | None) -> tuple[int, bool]:
             if os.path.exists(cand):
                 path = cand
     if path:
-        # IMAGE_ICON=1 | LR_LOADFROMFILE=0x10 | LR_DEFAULTSIZE=0x40
+        # ExtractIconExW 对 exe / dll / ico 都能提取，比 LoadImageW(LR_LOADFROMFILE) 更通用；
+        # 后者对 exe 会返回 0（拿不到 exe 内嵌图标）。
+        big = wintypes.HICON()
+        small = wintypes.HICON()
+        n = _shell32.ExtractIconExW(path, 0, ctypes.byref(big),
+                                    ctypes.byref(small), 1)
+        if n > 0:
+            if small.value:
+                if big.value:
+                    _user32.DestroyIcon(big)
+                return int(small.value), True
+            if big.value:
+                return int(big.value), True
+        # 回退 LoadImageW（纯 .ico 文件）
         h = _user32.LoadImageW(None, path, 1, 0, 0, 0x10 | 0x40)
         if h:
             return int(h), True

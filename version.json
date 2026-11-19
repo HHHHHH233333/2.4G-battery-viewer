@@ -1,6 +1,6 @@
 {
-  "version": "1.7.0",
-  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.0/2.4G-Battery-Viewer.exe",
-  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.0/SHA256SUMS.txt",
-  "notes": "- 新增系统托盘常驻：启动即驻托盘，悬停显示电量，右键可「显示窗口/立即刷新/退出」，单击恢复窗口\n- 关闭窗口改为「最小化到托盘 / 退出并清空进程」两个选项，彻底退出零残留\n- 界面配色升级为柔和治愈系：低饱和暖色调，卡片描边更清晰，百分比对齐\n- 全局异常兜底：出错弹出友好提示，可一键复制详情\n- 修复：反馈发送失败自动回退为「复制报告 + 打开提交页」\n- 修复：手动刷新立即重新识别所有品牌（原只重扫罗技）\n- 修复：更新前检查目录可写，下载/校验失败自动清理临时文件\n- 新增单元测试，push/PR 自动运行"
+  "version": "1.7.1",
+  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.1/2.4G-Battery-Viewer.exe",
+  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.1/SHA256SUMS.txt",
+  "notes": "- 修复：托盘图标在 exe 下会显示成系统通用图标，现正确显示软件自身图标"
 }

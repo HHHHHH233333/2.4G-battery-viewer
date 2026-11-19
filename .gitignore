@@ -19,6 +19,7 @@ _MEI*/
 # 单文件版 EXE：由 GitHub Actions 打包发布，不提交到仓库
 2.4G电量.exe
 2.4G-Battery-Viewer.exe
+*.exe.bak
 
 # 系统
 Thumbs.db

@@ -21,6 +21,7 @@ import hashlib
 import json
 import math
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -52,10 +53,16 @@ from hid_win import (
     report_descriptor,
 )
 
+try:
+    from tray_win import TrayIcon, EV_SHOW, EV_REFRESH, EV_EXIT
+except Exception:  # 非 Windows 平台：托盘不可用，其它功能仍可用
+    TrayIcon = None
+    EV_SHOW = EV_REFRESH = EV_EXIT = ""
+
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.6.7"
+APP_VERSION = "1.7.0"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -72,24 +79,26 @@ UPDATE_TIMEOUT = 6
 UPDATE_DOWNLOAD_TIMEOUT = 600
 UPDATE_UA = "2.4G-battery-viewer/" + APP_VERSION
 
-# 颜色：深色科技风，青色霓虹高亮
-BG = "#0A0E17"
-PANEL = "#121826"
-PANEL_LINE = "#1E2838"
-SHADOW = "#05080F"
-HOVER = "#182132"
-BTN_HOVER = "#1B2740"
-CARD_LINE = "#1E2A3E"
-TEXT = "#E7EEF8"
-MUTED = "#8B98AB"
-DIM = "#5E6B7F"
-GREEN = "#2EE6A8"
-AMBER = "#F5B944"
-RED = "#FF6B6B"
-BLUE = "#4DA6FF"
-TRACK = "#1A2233"
-ACCENT = "#35C4E8"
-ACCENT_MOUSE = "#A78BFA"
+# 颜色：柔和的暗色主题，低饱和、低对比、暖色调，久看不累。
+# 深蓝灰底 + 薄荷绿 / 暖琥珀 / 天蓝点缀，整体偏“治愈系”。
+BG = "#141A26"
+PANEL = "#1B2331"
+PANEL_LINE = "#2A3444"
+SHADOW = "#0E141E"
+HOVER = "#222C3C"
+BTN_HOVER = "#27344A"
+CARD_LINE = "#2B3647"
+CARD_BG = "#1E2735"
+TEXT = "#E9EFF7"
+MUTED = "#97A4B8"
+DIM = "#6B7890"
+GREEN = "#4CD2A5"
+AMBER = "#F2BC63"
+RED = "#F08A92"
+BLUE = "#6FB3F2"
+TRACK = "#232D3D"
+ACCENT = "#5BC8D4"
+ACCENT_MOUSE = "#A79CF0"
 BAR_SEGS = 24
 
 # 设备槽位：每个槽位渲染一张卡片。新增设备时往这里加（并在 Monitor 补读取逻辑）。
@@ -196,6 +205,18 @@ LOGI_SW_ID = 0x08
 # 罗技按接口缓存探测结果，避免每 3 秒都把接收器全查一遍。
 _logi_cache: dict = {}
 _logi_lock = threading.Lock()
+
+
+def _clear_device_caches():
+    """手动刷新时清空所有品牌探测缓存，强制重新枚举读取。"""
+    with _logi_lock:
+        _logi_cache.clear()
+    with _razer_lock:
+        _razer_cache.clear()
+    with _ss_lock:
+        _ss_cache.clear()
+    with _asus_lock:
+        _asus_cache.clear()
 
 
 def vendor_name(vid: int) -> str:
@@ -1101,8 +1122,7 @@ class Monitor:
                 mouse_poll_next = 0.0
                 rapoo_cooldown = 0.0
                 mouse_probe_deadline = 0.0
-                with _logi_lock:
-                    _logi_cache.clear()
+                _clear_device_caches()
                 if mouse_dev is not None:
                     try:
                         mouse_dev.close()
@@ -1307,15 +1327,20 @@ class App:
         self._fb_status = None
         self._fb_report = None
         self._fb_raw = None
+        self.tray = None
+        self._tray_events = None
+        self._quitting = False
+        self._error_shown = False
 
         root.withdraw()
         root.title(APP_TITLE)
         root.configure(bg=BG)
-        root.protocol("WM_DELETE_WINDOW", self.close)
-        root.bind("<Escape>", lambda e: self.close())
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
+        root.bind("<Escape>", lambda e: self._on_close())
         root.bind("<F5>", lambda e: self.monitor.refresh_now())
         root.bind("<Control-r>", lambda e: self.monitor.refresh_now())
         root.bind("<FocusOut>", lambda e: self._hide_tip())
+        self._install_exception_handler()
 
         # Windows 125%/150% 缩放下，Tk 的 geometry 仍是物理像素。
         # 先按 96 DPI 的逻辑尺寸画，再整体放大，字体由 Tk 自己按 DPI 放大。
@@ -1378,6 +1403,7 @@ class App:
         apply_window_style(self.root)
         self.root.after(60, lambda: apply_window_style(self.root))
         self.monitor.start()
+        self._start_tray()
         self.root.after(200, self._tick)
         self.root.after(0, self._pulse)
 
@@ -1387,12 +1413,12 @@ class App:
         # 窗口背景：顶部略亮的纵向渐变（先画，垫在所有元素下面）
         for _i in range(26):
             _t = _i / 25.0
-            _col = _mix_hex("#0E1523", BG, _t)
+            _col = _mix_hex("#1E2838", BG, _t)
             _y0 = self.H * _i / 26.0
             _y1 = self.H * (_i + 1) / 26.0 + 1
             c.create_rectangle(0, _y0, self.W, _y1, fill=_col, outline="")
         # 左上角小电池标
-        round_rect(c, 22, 18, 48, 44, 8, fill="#0E2B24", outline="#1F4A3E", width=1)
+        round_rect(c, 22, 18, 48, 44, 8, fill="#14352E", outline="#2A5148", width=1)
         round_rect(c, 29, 28, 40, 36, 2, fill=BG, outline=GREEN, width=1)
         c.create_rectangle(40, 30, 42, 34, fill=GREEN, outline="")
         c.create_polygon(34, 29, 31, 33, 34, 33, 32, 38, 38, 32, 35, 32,
@@ -1441,7 +1467,7 @@ class App:
     def _hover_pin(self, on: bool):
         c = self.canvas
         if self.pin:
-            c.itemconfigure(self.btn_pin_bg, fill="#14355C")
+            c.itemconfigure(self.btn_pin_bg, fill="#1E3A5C")
         else:
             c.itemconfigure(self.btn_pin_bg, fill=BTN_HOVER if on else BG)
 
@@ -1457,7 +1483,7 @@ class App:
 
         # 方块卡片 + 顶部主题色高光线
         bg = round_rect(c, tx, ty, tx + 206, ty + 216, 14,
-                        fill=PANEL, outline="")
+                        fill=CARD_BG, outline=CARD_LINE, width=1)
         items.append(bg)
         items.append(round_rect(c, tx + 18, ty + 5, tx + 188, ty + 8, 2,
                                 fill=_mix_hex(accent, PANEL, 0.4), outline=""))
@@ -1509,7 +1535,7 @@ class App:
                                  fill=MUTED, font=(FONT, 9))
         pct_txt = c.create_text(cx, ring_c, text="--", anchor="center",
                                 fill=DIM, font=self.pct_font)
-        pct_unit = c.create_text(cx, ring_c, text="", anchor="nw",
+        pct_unit = c.create_text(cx, ring_c, text="", anchor="center",
                                  fill=DIM, font=self.unit_font)
 
         sdot = c.create_oval(cx - 42, ty + 180, cx - 36, ty + 186,
@@ -1519,7 +1545,7 @@ class App:
 
         # 胶囊默认隐藏，只在充电/低电/未连接/未适配时出现
         pill = round_rect(c, cx - 24, ty + 197, cx + 24, ty + 211, 8,
-                          fill="#1B2536", outline="")
+                          fill="#243044", outline="")
         pill_txt = c.create_text(cx, ty + 204, text="", anchor="center",
                                  fill=MUTED, font=(FONT, 8))
         c.itemconfigure(pill, state="hidden")
@@ -1555,12 +1581,12 @@ class App:
         c.tag_bind(self.fb_btn, "<Leave>",
                    lambda e: c.itemconfigure(self.fb_btn, fill=BLUE))
         self.update_txt = c.create_text(self.W - 22, 288, text="检查更新", anchor="ne",
-                                        fill=DIM, font=(FONT, 8))
+                                        fill=MUTED, font=(FONT, 8))
         c.tag_bind(self.update_txt, "<Button-1>", lambda e: self._check_update_click())
         c.tag_bind(self.update_txt, "<Enter>",
                    lambda e: c.itemconfigure(self.update_txt, fill=BLUE))
         c.tag_bind(self.update_txt, "<Leave>",
-                   lambda e: c.itemconfigure(self.update_txt, fill=DIM))
+                   lambda e: c.itemconfigure(self.update_txt, fill=MUTED))
 
     def _build_tooltip(self):
         self.tip = tk.Toplevel(self.root)
@@ -1663,7 +1689,7 @@ class App:
         ).pack(fill="x", padx=14, pady=(0, 8))
 
         self._fb_text = tk.Text(win, width=74, height=18, wrap="none",
-                                bg="#0B1120", fg=TEXT, font=("Consolas", 8),
+                                bg="#121826", fg=TEXT, font=("Consolas", 8),
                                 padx=10, pady=8, relief="solid", bd=1,
                                 highlightthickness=0)
         self._fb_text.pack(fill="both", expand=True, padx=14)
@@ -1677,19 +1703,19 @@ class App:
         bar = tk.Frame(win, bg=PANEL)
         bar.pack(fill="x", padx=14, pady=(0, 12))
         send = tk.Button(bar, text="发送给开发者", command=self._fb_send,
-                         bg="#122A42", fg=BLUE, activebackground="#1B3A5C",
+                         bg="#1D3A55", fg=BLUE, activebackground="#27496B",
                          activeforeground=BLUE, relief="flat", font=(FONT, 9),
                          padx=12, pady=5)
         copy = tk.Button(bar, text="复制报告", command=self._fb_copy,
-                         bg="#1B2740", fg=TEXT, activebackground="#24324A",
+                         bg="#27344A", fg=TEXT, activebackground="#33415C",
                          activeforeground=TEXT, relief="flat", font=(FONT, 9),
                          padx=12, pady=5)
         save = tk.Button(bar, text="保存为文件", command=self._fb_save,
-                         bg="#1B2740", fg=TEXT, activebackground="#24324A",
+                         bg="#27344A", fg=TEXT, activebackground="#33415C",
                          activeforeground=TEXT, relief="flat", font=(FONT, 9),
                          padx=12, pady=5)
         close = tk.Button(bar, text="关闭", command=self._fb_close,
-                          bg="#1B2740", fg=TEXT, activebackground="#24324A",
+                          bg="#27344A", fg=TEXT, activebackground="#33415C",
                           activeforeground=TEXT, relief="flat", font=(FONT, 9),
                           padx=12, pady=5)
         send.pack(side="left")
@@ -1779,20 +1805,28 @@ class App:
         if FEEDBACK_ENDPOINT:
             def run():
                 ok, msg = upload_report(self._fb_report, self._fb_raw or b"")
-                self.root.after(0, lambda: self._fb_set_status(
-                    ("已发送：" + msg) if ok else msg))
+                if ok:
+                    self.root.after(0, lambda: self._fb_set_status("已发送：" + msg))
+                else:
+                    # 连不上时自动回退为“复制报告 + 打开 Issue 预填页”
+                    self.root.after(0, lambda: self._fb_fallback(
+                        "发送失败（" + msg + "），已自动回退为复制 + 打开提交页。"))
             threading.Thread(target=run, daemon=True).start()
         else:
-            try:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(self._fb_report)
-            except Exception:
-                pass
-            self._fb_set_status("报告已复制。将在浏览器打开提交页，请 Ctrl+V 粘贴后提交。")
-            try:
-                os.startfile(_issue_url())
-            except Exception as e:
-                self._fb_set_status(f"打开浏览器失败: {e!r}")
+            self._fb_fallback("报告已复制。将在浏览器打开提交页，请 Ctrl+V 粘贴后提交。")
+
+    def _fb_fallback(self, msg):
+        """发送失败 / 未配置端点时的回退：复制报告到剪贴板并打开 Issue 预填页。"""
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._fb_report)
+        except Exception:
+            pass
+        self._fb_set_status(msg)
+        try:
+            os.startfile(_issue_url())
+        except Exception as e:
+            self._fb_set_status(f"打开浏览器失败: {e!r}（报告已复制，可手动粘贴）")
 
 
     # ---------- 检查更新 ----------
@@ -1870,6 +1904,10 @@ class App:
         if not exe:
             messagebox.showinfo("更新", f"检测到新版本 v{latest}。\n当前为源码运行，请手动下载更新。")
             return
+        if not _dir_writable(os.path.dirname(exe)):
+            messagebox.showerror(
+                "更新", "程序所在目录不可写，无法自动更新。\n请把程序移到桌面或其它可写目录后再试。")
+            return
         win = tk.Toplevel(self.root)
         win.title("更新")
         win.configure(bg=PANEL)
@@ -1916,6 +1954,11 @@ class App:
                         raise RuntimeError("下载文件校验失败（SHA256 不一致），已取消更新")
                 self.root.after(0, lambda: self._finish_update(win, exe, new_path, latest))
             except Exception as e:
+                try:
+                    if os.path.exists(new_path):
+                        os.remove(new_path)
+                except Exception:
+                    pass
                 self.root.after(0, lambda: self._update_download_fail(win, str(e)))
         threading.Thread(target=run, daemon=True).start()
 
@@ -1930,6 +1973,13 @@ class App:
             messagebox.showerror("更新", f"准备替换失败：{e!r}")
             return
         messagebox.showinfo("更新", f"v{latest} 下载完成，程序即将自动重启。")
+        if self.tray is not None:
+            try:
+                self.tray.remove()
+            except Exception:
+                pass
+            self.tray = None
+        self.monitor.stop()
         self.root.destroy()
 
     def _update_download_fail(self, win, msg):
@@ -1944,7 +1994,7 @@ class App:
         self.pin = not self.pin
         self.root.attributes("-topmost", self.pin)
         c = self.canvas
-        c.itemconfigure(self.btn_pin_bg, fill="#14355C" if self.pin else BG)
+        c.itemconfigure(self.btn_pin_bg, fill="#1E3A5C" if self.pin else BG)
         c.itemconfigure(self.pin_icon, fill=BLUE if self.pin else MUTED)
 
     # ---------- 刷新 ----------
@@ -2000,8 +2050,8 @@ class App:
             c.itemconfigure(row["pct_unit"], text="%", state="normal",
                             fill=pct_color)
             c.coords(row["pct_txt"], (left + num_w / 2) * s, ring_c * s)
-            c.coords(row["pct_unit"], (left + num_w + gap) * s,
-                     (ring_c - 6) * s)
+            c.coords(row["pct_unit"], (left + num_w + gap + unit_w / 2) * s,
+                     ring_c * s)
 
         # 环形电量：填充弧 + 顶端光点（平滑动画）
         row["arc_color"] = bar_color
@@ -2027,30 +2077,30 @@ class App:
         status_text = state.status
         show_pill = False
         pill_text = ""
-        pill_fill = "#1B2536"
+        pill_fill = "#243044"
         pill_fg = MUTED
         dot_color = DIM
         if state.online:
             if is_charging:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "充电中", "#122A42", BLUE
+                pill_text, pill_fill, pill_fg = "充电中", "#1D3A55", BLUE
                 dot_color = BLUE
                 if status_text.strip() == "充电中":
                     status_text = "2.4G 已连接"
             elif state.battery is not None and state.battery <= 20:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "电量低", "#2B2112", AMBER
+                pill_text, pill_fill, pill_fg = "电量低", "#3A2F1E", AMBER
                 dot_color = AMBER
             else:
                 dot_color = GREEN
         else:
             if "暂不支持" in status_text:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "未适配", "#2B2112", AMBER
+                pill_text, pill_fill, pill_fg = "未适配", "#3A2F1E", AMBER
                 dot_color = AMBER
             else:
                 show_pill = True
-                pill_text, pill_fill, pill_fg = "未连接", "#1B2536", MUTED
+                pill_text, pill_fill, pill_fg = "未连接", "#243044", MUTED
                 dot_color = DIM
 
         c.itemconfigure(row["sdot"], fill=dot_color)
@@ -2145,6 +2195,7 @@ class App:
             _states = self.monitor.snapshot()
             for _slot, _st in zip(DEVICE_SLOTS, _states):
                 self._update_card(_slot["key"], _st)
+            self._update_tray_tooltip(_states)
             online = sum(1 for _st in _states if _st.online)
             if online:
                 subtitle = f"{online} 台设备在线"
@@ -2166,17 +2217,216 @@ class App:
             pass
         self.root.after(300, self._tick)
 
-    def close(self):
-        self._cancel_tip()
+    # ---------- 异常兜底 ----------
+    def _install_exception_handler(self):
+        import traceback
+
+        def handler(exc_type, exc_value, exc_tb):
+            detail = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            self._show_error(detail)
+
+        self.root.report_callback_exception = handler
+
+        def thread_hook(args):
+            try:
+                detail = "".join(traceback.format_exception(
+                    args.exc_type, args.exc_value, args.exc_traceback))
+            except Exception:
+                detail = repr(args)
+            try:
+                self.root.after(0, lambda: self._show_error(detail))
+            except Exception:
+                pass
+
+        threading.excepthook = thread_hook
+
+    def _show_error(self, detail):
+        if self._error_shown:
+            return
+        self._error_shown = True
         try:
-            if self.tip is not None:
-                self.tip.destroy()
+            win = tk.Toplevel(self.root)
+            win.title("发生错误")
+            win.configure(bg=PANEL)
+            win.resizable(True, True)
+            win.attributes("-topmost", True)
+            tk.Label(win, text="程序遇到了一个内部错误。", bg=PANEL, fg=TEXT,
+                     font=(FONT, 10, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
+            tk.Label(win, text="把下面内容复制发给开发者，可以更快定位问题。",
+                     bg=PANEL, fg=MUTED, font=(FONT, 8)).pack(anchor="w", padx=14, pady=(0, 8))
+            txt = tk.Text(win, width=80, height=16, wrap="none",
+                          bg="#121826", fg=TEXT, font=("Consolas", 8),
+                          relief="solid", bd=1, highlightthickness=0)
+            txt.pack(fill="both", expand=True, padx=14)
+            txt.insert("1.0", detail)
+            txt.configure(state="disabled")
+            bar = tk.Frame(win, bg=PANEL)
+            bar.pack(fill="x", padx=14, pady=(8, 12))
+
+            def copy():
+                try:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(detail)
+                except Exception:
+                    pass
+
+            tk.Button(bar, text="复制详情", command=copy,
+                      bg="#27344A", fg=TEXT, activebackground="#33415C",
+                      activeforeground=TEXT, relief="flat", font=(FONT, 9),
+                      padx=12, pady=5).pack(side="left")
+            tk.Button(bar, text="关闭", command=win.destroy,
+                      bg="#27344A", fg=TEXT, activebackground="#33415C",
+                      activeforeground=TEXT, relief="flat", font=(FONT, 9),
+                      padx=12, pady=5).pack(side="right")
+        except Exception:
+            self._error_shown = False
+
+    # ---------- 托盘 ----------
+    def _start_tray(self):
+        if TrayIcon is None:
+            return
+        try:
+            self._tray_events = queue.Queue()
+            self.tray = TrayIcon(self._tray_events, tooltip=APP_TITLE)
+            self.tray.start()
+            self.root.after(100, self._poll_tray)
+        except Exception:
+            self.tray = None
+            self._tray_events = None
+
+    def _poll_tray(self):
+        q = self._tray_events
+        if q is not None:
+            try:
+                while True:
+                    ev = q.get_nowait()
+                    if ev == EV_EXIT:
+                        self._quit_app()
+                        return
+                    if ev == EV_SHOW:
+                        self._show_window()
+                    elif ev == EV_REFRESH:
+                        self.monitor.refresh_now()
+            except queue.Empty:
+                pass
+        if not self._quitting:
+            self.root.after(100, self._poll_tray)
+
+    def _show_window(self):
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            apply_window_style(self.root)
         except Exception:
             pass
+
+    def _update_tray_tooltip(self, states):
+        if self.tray is None:
+            return
+        parts = []
+        for slot, st in zip(DEVICE_SLOTS, states):
+            label = "键盘" if slot["kind"] == "keyboard" else "鼠标"
+            pct = f"{st.battery}%" if st.online and st.battery is not None else "—"
+            parts.append(f"{label} {pct}")
         try:
-            self.monitor.stop()
-        finally:
+            self.tray.set_tooltip(APP_TITLE + " · " + " · ".join(parts))
+        except Exception:
+            pass
+
+    # ---------- 关闭 / 退出 ----------
+    def _on_close(self, event=None):
+        """点 X / Esc：给出“缩到托盘 / 退出并清空进程”两个选项。"""
+        if self._quitting:
+            return
+        win = tk.Toplevel(self.root)
+        win.title(APP_TITLE)
+        win.configure(bg=PANEL)
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+        tk.Label(win, text="请选择操作", bg=PANEL, fg=TEXT,
+                 font=(FONT, 11, "bold")).pack(padx=24, pady=(16, 6))
+        tk.Label(win, text="缩小到托盘后台继续刷新，或彻底退出。",
+                 bg=PANEL, fg=MUTED, font=(FONT, 8)).pack(padx=24, pady=(0, 14))
+        bar = tk.Frame(win, bg=PANEL)
+        bar.pack(padx=24, pady=(0, 16))
+        tk.Button(bar, text="最小化到托盘",
+                  command=lambda: self._choose_close(win, "tray"),
+                  bg="#27344A", fg=TEXT, activebackground="#33415C",
+                  activeforeground=TEXT, relief="flat", font=(FONT, 9),
+                  padx=12, pady=6).pack(side="left")
+        tk.Button(bar, text="退出并清空进程",
+                  command=lambda: self._choose_close(win, "exit"),
+                  bg="#3A2F1E", fg=AMBER, activebackground="#4A3D2A",
+                  activeforeground=AMBER, relief="flat", font=(FONT, 9),
+                  padx=12, pady=6).pack(side="left", padx=(10, 0))
+        win.bind("<Escape>", lambda e: self._choose_close(win, "tray"))
+        # 布局完成后再居中到主窗口
+        try:
+            win.update_idletasks()
+            w = win.winfo_reqwidth()
+            h = win.winfo_reqheight()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+            win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+    def _choose_close(self, win, action):
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        if action == "exit":
+            self._quit_app()
+        else:
+            self._hide_to_tray()
+
+    def _hide_to_tray(self):
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        if self.tray is not None:
+            try:
+                self.tray.show_balloon(
+                    APP_TITLE, "程序仍在后台运行：单击托盘图标打开，右键可退出。")
+            except Exception:
+                pass
+
+    def _quit_app(self):
+        if self._quitting:
+            return
+        self._quitting = True
+        self._shutdown()
+        os._exit(0)
+
+    def _shutdown(self):
+        """统一退出：停监控、删托盘图标、关提示窗与主窗，保证零残留。"""
+        self._cancel_tip()
+        if self.tip is not None:
+            try:
+                self.tip.destroy()
+            except Exception:
+                pass
+        self.monitor.stop()
+        if self.tray is not None:
+            try:
+                self.tray.remove()
+            except Exception:
+                pass
+            self.tray = None
+        try:
             self.root.destroy()
+        except Exception:
+            pass
+
+    def close(self):
+        """兼容旧入口：彻底退出。"""
+        self._quit_app()
 
 
 def acquire_single_instance():
@@ -2483,6 +2733,18 @@ def _exe_path() -> str | None:
     if getattr(sys, "frozen", False):
         return sys.executable
     return None
+
+
+def _dir_writable(path: str) -> bool:
+    """试探目录是否可写（Windows 上 os.access 不可靠，用真实写/删来验证）。"""
+    probe = os.path.join(path, "._battery_write_probe")
+    try:
+        with open(probe, "w", encoding="ascii") as f:
+            f.write("")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
 
 
 def _apply_update(exe_path: str, new_path: str) -> None:

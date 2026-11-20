@@ -34,6 +34,13 @@ def test_parse_sha256():
     assert bv._parse_sha256("no hash here") == ""
 
 
+def test_friendly_update_error():
+    assert bv._friendly_update_error(Exception("timed out")) == "网络超时，请稍后重试"
+    assert bv._friendly_update_error(Exception("getaddrinfo failed")) == "无法解析服务器，请检查网络连接"
+    assert bv._friendly_update_error(Exception("connection refused")) == "无法连接更新服务器，请检查网络"
+    assert bv._friendly_update_error(Exception("some unknown error")) == "some unknown error"
+
+
 # ---------- 显示辅助 ----------
 def test_elide():
     assert bv._elide("hello", 8) == "hello"

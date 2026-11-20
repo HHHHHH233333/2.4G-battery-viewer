@@ -1,6 +1,6 @@
 {
-  "version": "1.7.1",
-  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.1/2.4G-Battery-Viewer.exe",
-  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.1/SHA256SUMS.txt",
-  "notes": "- 修复：托盘图标在 exe 下会显示成系统通用图标，现正确显示软件自身图标"
+  "version": "1.7.2",
+  "download_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.2/2.4G-Battery-Viewer.exe",
+  "checksum_url": "https://ghfast.top/https://github.com/HHHHHH233333/2.4G-battery-viewer/releases/download/v1.7.2/SHA256SUMS.txt",
+  "notes": "- 修复：更新下载时因子线程访问界面导致失败，现在下载进度/结果改走线程安全队列，更新可正常完成\n- 修复：下载失败时错误弹窗误报 NameError，现正确显示失败原因\n- 修复：反馈发送/采集的界面更新同样改为线程安全调度"
 }

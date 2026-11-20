@@ -62,7 +62,7 @@ except Exception:  # 非 Windows 平台：托盘不可用，其它功能仍可�
 APP_TITLE = "2.4G 电量"
 MUTEX_NAME = "2.4G_Battery_Viewer_SingleInstance"
 REFRESH_SECONDS = 15
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 
 # 反馈上报：只在用户主动点“反馈设备”时才联网，平时仍然零网络、零日志。
 # 配了 FEEDBACK_ENDPOINT 后“发送给开发者”就是真正的一键上传；
@@ -1331,6 +1331,7 @@ class App:
         self._tray_events = None
         self._quitting = False
         self._error_shown = False
+        self._dispatch_q = queue.Queue()
 
         root.withdraw()
         root.title(APP_TITLE)
@@ -1404,6 +1405,7 @@ class App:
         self.root.after(60, lambda: apply_window_style(self.root))
         self.monitor.start()
         self._start_tray()
+        self.root.after(30, self._poll_dispatch)
         self.root.after(200, self._tick)
         self.root.after(0, self._pulse)
 
@@ -1746,7 +1748,7 @@ class App:
             text, raw = f"收集失败: {e!r}", b""
         self._fb_report = text
         self._fb_raw = raw
-        self.root.after(0, self._fb_populate)
+        self._dispatch(self._fb_populate)
 
     def _fb_populate(self):
         if self._fb_text is None:
@@ -1806,11 +1808,11 @@ class App:
             def run():
                 ok, msg = upload_report(self._fb_report, self._fb_raw or b"")
                 if ok:
-                    self.root.after(0, lambda: self._fb_set_status("已发送：" + msg))
+                    self._dispatch(self._fb_set_status, "已发送：" + msg)
                 else:
                     # 连不上时自动回退为“复制报告 + 打开 Issue 预填页”
-                    self.root.after(0, lambda: self._fb_fallback(
-                        "发送失败（" + msg + "），已自动回退为复制 + 打开提交页。"))
+                    self._dispatch(self._fb_fallback,
+                                   "发送失败（" + msg + "），已自动回退为复制 + 打开提交页。")
             threading.Thread(target=run, daemon=True).start()
         else:
             self._fb_fallback("报告已复制。将在浏览器打开提交页，请 Ctrl+V 粘贴后提交。")
@@ -1924,13 +1926,44 @@ class App:
 
         new_path = os.path.join(os.path.dirname(exe), "_battery_update.tmp")
 
+        # 下载线程与主线程之间只用线程安全队列通信，绝不从子线程碰 Tk
+        # （子线程调用 lbl.config()/root.after() 会抛 "main thread is not in main loop"）
+        events = queue.Queue()
+
         def progress(done, total):
-            if total:
-                pct = min(99, int(done * 100 / total))
-                lbl.config(text=f"正在下载 v{latest}… {pct}%")
-            else:
-                lbl.config(text=f"正在下载 v{latest}… {done // 1024} KB")
-            win.update_idletasks()
+            events.put(("progress", done, total))
+
+        def poll():
+            try:
+                if not win.winfo_exists():
+                    return
+            except Exception:
+                pass
+            try:
+                while True:
+                    ev = events.get_nowait()
+                    kind = ev[0]
+                    if kind == "progress":
+                        _, done, total = ev
+                        try:
+                            if total:
+                                pct = min(99, int(done * 100 / total))
+                                lbl.config(text=f"正在下载 v{latest}… {pct}%")
+                            else:
+                                lbl.config(text=f"正在下载 v{latest}… {done // 1024} KB")
+                        except Exception:
+                            pass
+                    elif kind == "done":
+                        self._finish_update(win, exe, new_path, latest)
+                        return
+                    elif kind == "fail":
+                        self._update_download_fail(win, ev[1])
+                        return
+            except queue.Empty:
+                pass
+            self.root.after(60, poll)
+
+        self.root.after(60, poll)
 
         def run():
             try:
@@ -1952,14 +1985,14 @@ class App:
                         raise RuntimeError("无法获取校验信息，已取消更新")
                     if _sha256_file(new_path) != expected:
                         raise RuntimeError("下载文件校验失败（SHA256 不一致），已取消更新")
-                self.root.after(0, lambda: self._finish_update(win, exe, new_path, latest))
+                events.put(("done",))
             except Exception as e:
                 try:
                     if os.path.exists(new_path):
                         os.remove(new_path)
                 except Exception:
                     pass
-                self.root.after(0, lambda: self._update_download_fail(win, str(e)))
+                events.put(("fail", e))
         threading.Thread(target=run, daemon=True).start()
 
     def _finish_update(self, win, exe, new_path, latest):
@@ -1982,12 +2015,12 @@ class App:
         self.monitor.stop()
         self.root.destroy()
 
-    def _update_download_fail(self, win, msg):
+    def _update_download_fail(self, win, err):
         try:
             win.destroy()
         except Exception:
             pass
-        messagebox.showerror("更新", f"下载失败：{msg}")
+        messagebox.showerror("更新", "下载失败：" + _friendly_update_error(err))
 
 
     def _toggle_pin(self):
@@ -2233,10 +2266,7 @@ class App:
                     args.exc_type, args.exc_value, args.exc_traceback))
             except Exception:
                 detail = repr(args)
-            try:
-                self.root.after(0, lambda: self._show_error(detail))
-            except Exception:
-                pass
+            self._dispatch(self._show_error, detail)
 
         threading.excepthook = thread_hook
 
@@ -2280,6 +2310,27 @@ class App:
                       padx=12, pady=5).pack(side="right")
         except Exception:
             self._error_shown = False
+
+    # ---------- 线程安全调度 ----------
+    def _dispatch(self, fn, *args):
+        """把 fn(*args) 安全地调度到主线程执行（子线程调用也安全，不碰 Tk）。"""
+        try:
+            self._dispatch_q.put((fn, args))
+        except Exception:
+            pass
+
+    def _poll_dispatch(self):
+        try:
+            while True:
+                fn, args = self._dispatch_q.get_nowait()
+                try:
+                    fn(*args)
+                except Exception:
+                    pass
+        except queue.Empty:
+            pass
+        if not self._quitting:
+            self.root.after(30, self._poll_dispatch)
 
     # ---------- 托盘 ----------
     def _start_tray(self):
